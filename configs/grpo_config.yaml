@@ -1,0 +1,33 @@
+model:
+  base_model: "Qwen/Qwen2.5-VL-3B"
+  sft_checkpoint: "checkpoints/sft"
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+
+training:
+  lr: 1.0e-5
+  epochs: 5
+  group_size: 4
+  clip_eps: 0.2
+  kl_coef: 0.02
+  logging_steps: 50
+  save_steps: 200
+
+reward:
+  alpha: 0.4   # weight for ro
+  beta: 0.4    # weight for rt
+  gamma: 0.2   # weight for rl
+  lambda_s: 0.5
+  lambda_fp: 0.3
+  lambda_fn: 0.3
+
+data:
+  data_dir: "data/surv_vau"
+  split: "rl_train"
+  num_frames: 25
+  frame_size: 448
+  max_new_tokens: 384
+
+output:
+  checkpoint_dir: "checkpoints/grpo"
