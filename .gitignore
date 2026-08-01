@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.hypothesis/
+.venv/
+checkpoints/
+data/surv_vau/
+results/*.json
+results/*.csv
+!results/paper_reported_pre_revision.json
+human_evaluation/private_key.jsonl
+human_evaluation/ratings.jsonl
+*.log
+.DS_Store

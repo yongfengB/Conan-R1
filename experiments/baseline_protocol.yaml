@@ -1,0 +1,75 @@
+schema_version: 1
+status: execution_requires_external_checkpoints_or_predictions
+
+fairness_requirements:
+  dataset:
+    train_sources: "same Surv-VAU source-video training split"
+    validation_sources: "same source-isolated validation split"
+    test_sources: "same frozen source-isolated test split"
+  input:
+    frames: 25
+    frame_sampling: uniform
+    resolution: [224, 224]
+    temporal_unit: seconds
+  adaptation:
+    parameter_efficient_method: LoRA
+    rank: 16
+    alpha: 32
+    report_trainable_parameters: true
+    report_optimizer_steps: true
+    report_data_epochs: true
+  inference:
+    decoding: greedy
+    max_new_tokens: 384
+  scoring:
+    command_template: >
+      python scripts/score_predictions.py PREDICTIONS.jsonl
+      --model_name METHOD --data_dir data/surv_vau
+      --split test --output RESULT.json
+    required_prediction_fields: [video_id, raw_output]
+
+baselines:
+  - name: Qwen2.5-VL-3B-Instruct
+    category: unadapted_backbone
+    execution: "scripts/evaluate.py without --checkpoint"
+  - name: SFT-30
+    category: internal_control
+    checkpoint: checkpoints/sft30
+  - name: Continued-SFT-70
+    category: internal_data_epoch_matched_control
+    checkpoint: checkpoints/continued_sft70
+  - name: Continued-SFT-70-Update-Matched
+    category: internal_optimizer_step_matched_control
+    checkpoint: checkpoints/continued_sft70_update_matched
+  - name: SFT-100
+    category: internal_full_data_control
+    checkpoint: checkpoints/sft100
+  - name: Cue-R1
+    category: specialist_external
+    source_work: CueBench
+    status: requires_version_matched_author_checkpoint_or_retraining
+  - name: GtS
+    category: specialist_external
+    source_work: VAGU-and-GtS
+    status: requires_version_matched_author_checkpoint_or_retraining
+  - name: VALU-compatible-model
+    category: specialist_external
+    source_work: VALU
+    status: requires_protocol_adapter_and_author_checkpoint
+  - name: LRPO
+    category: specialist_external
+    source_work: Linguistic-Relative-Policy-Optimization
+    status: requires_version_matched_author_checkpoint_or_retraining
+  - name: RLER
+    category: specialist_external
+    source_work: Reinforce-to-Learn-Elect-to-Reason
+    status: requires_version_matched_author_checkpoint_or_retraining
+  - name: TimeLens
+    category: specialist_external
+    source_work: TimeLens
+    status: requires_version_matched_author_checkpoint_or_retraining
+
+reporting_rule: >
+  Never label an external comparison as fair unless every fairness requirement
+  is satisfied and its resolved configuration, checkpoint identity, and raw
+  predictions are archived.

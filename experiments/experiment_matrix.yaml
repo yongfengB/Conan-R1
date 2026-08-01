@@ -1,0 +1,80 @@
+schema_version: 1
+seed: 42
+single_run_protocol: true
+
+core_training:
+  - name: sft30
+    command: "torchrun --standalone --nproc_per_node=4 scripts/train_sft.py --config configs/sft_config.yaml"
+    checkpoint: "checkpoints/sft30"
+  - name: continued_sft70
+    command: "torchrun --standalone --nproc_per_node=4 scripts/train_sft.py --config configs/continued_sft_config.yaml"
+    checkpoint: "checkpoints/continued_sft70"
+    comparison_role: "same additional data and data epochs as GRPO"
+  - name: continued_sft70_update_matched
+    command: "torchrun --standalone --nproc_per_node=4 scripts/train_sft.py --config configs/continued_sft_update_matched_config.yaml"
+    checkpoint: "checkpoints/continued_sft70_update_matched"
+    comparison_role: "same additional data and optimizer-step count as GRPO"
+  - name: sft100
+    command: "torchrun --standalone --nproc_per_node=4 scripts/train_sft.py --config configs/sft100_config.yaml"
+    checkpoint: "checkpoints/sft100"
+  - name: conan_r1
+    command: "torchrun --standalone --nproc_per_node=4 scripts/train_grpo.py --config configs/grpo_config.yaml"
+    checkpoint: "checkpoints/grpo_full"
+
+grpo_ablations:
+  base_config: "configs/grpo_config.yaml"
+  variants:
+    # Progressive controls reported in the component-ablation table.
+    - name: rd_only
+      overrides: {reward.w_d: 1.0, reward.w_e: 0.0, reward.w_t: 0.0, reward.w_l: 0.0}
+    - name: rd_rl_only
+      overrides: {reward.w_d: 0.5, reward.w_e: 0.0, reward.w_t: 0.0, reward.w_l: 0.5}
+    # Full-minus-one diagnostic variants.
+    - name: without_rd
+      overrides: {reward.w_d: 0.0, reward.w_e: 0.3333333333, reward.w_t: 0.3333333333, reward.w_l: 0.3333333334}
+    - name: without_re
+      overrides: {reward.w_d: 0.3333333333, reward.w_e: 0.0, reward.w_t: 0.3333333333, reward.w_l: 0.3333333334}
+    - name: without_rt
+      overrides: {reward.w_d: 0.3333333333, reward.w_e: 0.3333333333, reward.w_t: 0.0, reward.w_l: 0.3333333334}
+    - name: without_rl
+      overrides: {reward.w_d: 0.3333333333, reward.w_e: 0.3333333333, reward.w_t: 0.3333333334, reward.w_l: 0.0}
+    - name: fixed_length_rl
+      overrides: {reward.fixed_reasoning_target_length: 64}
+
+reward_weight_sensitivity:
+  base_config: "configs/grpo_config.yaml"
+  variants:
+    - name: weights_degradation_heavy
+      overrides: {reward.w_d: 0.40, reward.w_e: 0.20, reward.w_t: 0.20, reward.w_l: 0.20}
+    - name: weights_task_heavy
+      overrides: {reward.w_d: 0.15, reward.w_e: 0.35, reward.w_t: 0.35, reward.w_l: 0.15}
+    - name: weights_no_length_emphasis
+      overrides: {reward.w_d: 0.30, reward.w_e: 0.30, reward.w_t: 0.30, reward.w_l: 0.10}
+
+structural_ablation:
+  name: without_type_influence
+  sft_config: "configs/no_type_influence_sft_config.yaml"
+  grpo_base_config: "configs/grpo_config.yaml"
+  overrides:
+    model.sft_checkpoint: "checkpoints/sft30_no_type_influence"
+    reward.w_d: 0.0
+    reward.w_e: 0.40
+    reward.w_t: 0.40
+    reward.w_l: 0.20
+    ablation.allow_missing_type_influence: true
+
+evaluation:
+  split: test
+  degradation_levels: [0.0, 0.2, 0.4, 0.8]
+  degradation_domains: [clean, synthetic_seen, synthetic_unseen, natural]
+  metrics:
+    - BLEU-1
+    - BLEU-4
+    - METEOR
+    - ROUGE-L
+    - tIoU
+    - Recall@tIoU=0.3
+    - Recall@tIoU=0.5
+    - Recall@tIoU=0.7
+    - Event-Accuracy
+    - Event-Macro-F1
