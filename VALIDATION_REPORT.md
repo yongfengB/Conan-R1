@@ -1,7 +1,3 @@
-# Local validation report
-
-Date: 2026-07-29 (Asia/Shanghai)
-
 ## Completed checks
 
 - `python -m compileall -q .`: passed.
