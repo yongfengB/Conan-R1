@@ -19,6 +19,49 @@ EXCLUDED_PARTS = {
 }
 EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".DS_Store"}
 EXCLUDED_NAMES = {".DS_Store"}
+ROOT_FILES = {
+    ".gitignore",
+    "README.md",
+    "REPRODUCIBILITY.md",
+    "conftest.py",
+    "requirements.txt",
+    "requirements-dev.txt",
+    "requirements-lock.txt",
+}
+CORE_PREFIXES = {
+    "configs",
+    "dataset",
+    "evaluation",
+    "model",
+    "training",
+    "tests",
+}
+CORE_SCRIPTS = {
+    "_common.py",
+    "build_dataset.py",
+    "build_release_package.py",
+    "check_manuscript_sync.py",
+    "collect_results.py",
+    "create_data_splits.py",
+    "create_demo_dataset.py",
+    "evaluate.py",
+    "evaluate_interventions.py",
+    "evaluate_robustness.py",
+    "infer.py",
+    "materialize_experiments.py",
+    "run_experiment_suite.py",
+    "score_predictions.py",
+    "train_grpo.py",
+    "train_sft.py",
+    "validate_dataset.py",
+}
+CORE_RESULTS = {
+    "README.md",
+    "artifact_inventory.json",
+    "demo_dataset_validation.json",
+    "demo_raw_predictions.jsonl",
+    "paper_results.json",
+}
 
 
 def included(path: Path, root: Path) -> bool:
@@ -31,11 +74,20 @@ def included(path: Path, root: Path) -> bool:
         or path.name == "MANIFEST.sha256"
     ):
         return False
-    if relative.parts[:2] == ("data", "surv_vau"):
-        return False
-    if relative.parts and relative.parts[0] == "results":
-        return path.name in {"README.md", "paper_results.json"}
-    return True
+    if len(relative.parts) == 1:
+        return relative.name in ROOT_FILES
+    prefix = relative.parts[0]
+    if prefix in CORE_PREFIXES:
+        return True
+    if prefix == "data":
+        return relative.name in {"README.md", "annotation.schema.json"} or relative.parts[1] == "demo"
+    if prefix == "experiments":
+        return relative.name == "experiment_matrix.yaml"
+    if prefix == "scripts":
+        return relative.name in CORE_SCRIPTS
+    if prefix == "results":
+        return relative.name in CORE_RESULTS
+    return False
 
 
 def sha256_bytes(payload: bytes) -> str:
@@ -46,7 +98,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--output",
-        default="../Conan-R1-paper-synchronized-code-2026-08-10.zip",
+        default="../Conan-R1-core-reference-2026-08-11.zip",
     )
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
@@ -78,7 +130,7 @@ def main() -> None:
         for relative, payload in sorted(archive_entries):
             info = zipfile.ZipInfo(
                 filename=f"Conan-R1/{relative}",
-                date_time=(2026, 8, 10, 0, 0, 0),
+                date_time=(2026, 8, 11, 0, 0, 0),
             )
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = (0o755 if relative.startswith("scripts/") else 0o644) << 16

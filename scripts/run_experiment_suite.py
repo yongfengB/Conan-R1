@@ -56,18 +56,12 @@ def main() -> None:
                 "torchrun --standalone --nproc_per_node=4 "
                 f"scripts/train_grpo.py --config configs/generated/{variant['name']}.yaml"
             )
-        for variant in matrix.get("reward_weight_sensitivity", {}).get(
-            "variants", []
-        ):
-            commands.append(
-                "torchrun --standalone --nproc_per_node=4 "
-                f"scripts/train_grpo.py --config configs/generated/{variant['name']}.yaml"
-            )
         commands.append(
             "torchrun --standalone --nproc_per_node=4 "
             "scripts/train_grpo.py --config "
             "configs/generated/without_type_influence.yaml"
         )
+        commands.append(matrix["degradation_profile_interventions"]["command"])
 
     report = {
         "single_run_protocol": True,

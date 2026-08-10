@@ -6,17 +6,6 @@ core_training:
   - name: sft30
     command: "torchrun --standalone --nproc_per_node=4 scripts/train_sft.py --config configs/sft_config.yaml"
     checkpoint: "checkpoints/sft30"
-  - name: continued_sft70
-    command: "torchrun --standalone --nproc_per_node=4 scripts/train_sft.py --config configs/continued_sft_config.yaml"
-    checkpoint: "checkpoints/continued_sft70"
-    comparison_role: "same additional data and data epochs as GRPO"
-  - name: continued_sft70_update_matched
-    command: "torchrun --standalone --nproc_per_node=4 scripts/train_sft.py --config configs/continued_sft_update_matched_config.yaml"
-    checkpoint: "checkpoints/continued_sft70_update_matched"
-    comparison_role: "same additional data and optimizer-step count as GRPO"
-  - name: sft100
-    command: "torchrun --standalone --nproc_per_node=4 scripts/train_sft.py --config configs/sft100_config.yaml"
-    checkpoint: "checkpoints/sft100"
   - name: conan_r1
     command: "torchrun --standalone --nproc_per_node=4 scripts/train_grpo.py --config configs/grpo_config.yaml"
     checkpoint: "checkpoints/grpo_full"
@@ -41,16 +30,6 @@ grpo_ablations:
     - name: fixed_length_rl
       overrides: {reward.fixed_reasoning_target_length: 64}
 
-reward_weight_sensitivity:
-  base_config: "configs/grpo_config.yaml"
-  variants:
-    - name: weights_degradation_heavy
-      overrides: {reward.w_d: 0.40, reward.w_e: 0.20, reward.w_t: 0.20, reward.w_l: 0.20}
-    - name: weights_task_heavy
-      overrides: {reward.w_d: 0.15, reward.w_e: 0.35, reward.w_t: 0.35, reward.w_l: 0.15}
-    - name: weights_no_length_emphasis
-      overrides: {reward.w_d: 0.30, reward.w_e: 0.30, reward.w_t: 0.30, reward.w_l: 0.10}
-
 structural_ablation:
   name: without_type_influence
   sft_config: "configs/no_type_influence_sft_config.yaml"
@@ -62,6 +41,17 @@ structural_ablation:
     reward.w_t: 0.40
     reward.w_l: 0.20
     ablation.allow_missing_type_influence: true
+
+degradation_profile_interventions:
+  command: "python scripts/evaluate_interventions.py --checkpoint checkpoints/grpo_full --data_dir data/surv_vau --split test --output results/interventions.json"
+  conditions:
+    - original
+    - event_evidence_masked
+    - temporal_order_shuffled
+    - type_permuted
+    - reasoning_removed
+    - rationale_only_no_video
+  interpretation: "behavioral sensitivity analysis, not formal causal identification"
 
 evaluation:
   split: test

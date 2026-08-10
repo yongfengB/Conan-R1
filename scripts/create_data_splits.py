@@ -115,7 +115,10 @@ def main() -> None:
 
     manifest = {
         "schema_version": 1,
+        "split_rule_id": "source-stratified-70-15-15_then-train-30-70-v1",
         "seed": args.seed,
+        "outer_fractions": {"train": 0.70, "val": 0.15, "test": 0.15},
+        "inner_train_fractions": {"sft_train": 0.30, "rl_train": 0.70},
         "annotations_sha256": file_sha256(annotations_path),
         "splits_sha256": file_sha256(split_path),
         "source_counts": dict(Counter(source_split.values())),

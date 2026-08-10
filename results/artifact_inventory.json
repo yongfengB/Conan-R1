@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "repository_role": "minimal_core_reference_implementation",
+  "paper_artifacts": {
+    "aggregate_tables": "results/paper_results.json",
+    "aggregate_tables_sha256": "a916d69bcc4aab71268d0b35c62ce8126b28e7542a7e2d62eb8e4fdcf7725daf",
+    "raw_predictions_in_release": false,
+    "checkpoint_files_in_release": false,
+    "full_data_split_manifest_in_release": false,
+    "claim": "manuscript_transcription_parity_only"
+  },
+  "demo_artifacts": {
+    "dataset_version": "conan-r1-synthetic-demo-v1",
+    "split_manifest": "data/demo/split_manifest.json",
+    "split_manifest_sha256": "be95da525f40f4b0069d8585469ac53fd51e3dfa425f4434f5f08c6fef1771cf",
+    "raw_predictions": "results/demo_raw_predictions.jsonl",
+    "raw_predictions_sha256": "580f09d43b98b4c7bc99d09e9b5f7e8600eb643044b15803dd1acee4707eb34a",
+    "claim": "executable_schema_parser_metric_test_only"
+  },
+  "runtime_provenance": {
+    "code_revision": "resolved by git rev-parse HEAD",
+    "checkpoint_identity": "SHA256 recorded by evaluation runners",
+    "data_identity": "annotation and split SHA256 recorded by evaluation runners"
+  }
+}

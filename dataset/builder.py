@@ -10,7 +10,6 @@ from .annotation_pipeline import (
     adjust_compactness,
     compute_aggregated_severity,
     derive_reasoning_target_length,
-    generate_answer,
     generate_influence,
     generate_reasoning,
 )
@@ -48,6 +47,29 @@ class SurvVAUBuilder:
             np.random.seed(seed)
         except ImportError:
             pass
+
+    @staticmethod
+    def serialize_answer(
+        event_type: str,
+        interval: Tuple[float, float],
+    ) -> str:
+        """Serialize the two independently annotated benchmark fields once.
+
+        Model-authored prose is deliberately excluded from ``<ANSWER>``.  It
+        remains available in ``<REASONING>`` and ``<CONCLUSION>``.  Keeping the
+        benchmark block canonical prevents a generated explanation from
+        introducing a second time interval that would make parsing ambiguous.
+        """
+        normalized_event = " ".join(str(event_type).split())
+        if not normalized_event or any(token in normalized_event for token in (";", "[", "]")):
+            raise ValueError("event_type contains a reserved ANSWER delimiter")
+        start, end = map(float, interval)
+        if not (0.0 <= start < end):
+            raise ValueError("ANSWER interval must satisfy 0 <= start < end")
+        return (
+            f"event_type: {normalized_event}; "
+            f"interval: [{start:.3f}, {end:.3f}]"
+        )
 
     # ------------------------------------------------------------------
     # Stage 1: collect & segment
@@ -292,10 +314,6 @@ class SurvVAUBuilder:
             reasoning, conclusion = generate_reasoning(
                 degraded, profile, influence, self.model_q
             )
-            generated_explanation = generate_answer(
-                degraded, conclusion, self.model_q
-            )
-
             # Stage 5: compactness adjustment
             s_bar = compute_aggregated_severity(profile)
             reasoning_adj = adjust_compactness(reasoning, s_bar, self.model_q)
@@ -325,11 +343,9 @@ class SurvVAUBuilder:
                 influence_annotation=influence,
                 reasoning_annotation=reasoning_adj,
                 conclusion_annotation=conclusion,
-                answer_annotation=(
-                    f"event_type: {degraded.source_clip.event_type}; "
-                    f"interval: [{degraded.start_sec:.3f}, "
-                    f"{degraded.end_sec:.3f}]; explanation: "
-                    f"{generated_explanation.strip()}"
+                answer_annotation=self.serialize_answer(
+                    degraded.source_clip.event_type,
+                    (degraded.start_sec, degraded.end_sec),
                 ),
                 split="",  # assigned later
                 synthesis_metadata=degraded.synthesis_metadata,

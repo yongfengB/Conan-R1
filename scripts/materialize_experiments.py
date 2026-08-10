@@ -31,7 +31,6 @@ def materialize(
     hashes = {}
 
     variants = list(block["variants"])
-    variants.extend(matrix.get("reward_weight_sensitivity", {}).get("variants", []))
     structural = matrix["structural_ablation"]
     variants.append(
         {

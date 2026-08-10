@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yongfengB/Conan-R1/data/annotation.schema.json",
+  "title": "Surv-VAU structured annotation record",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "video_id", "source_video_id", "source_dataset", "prompt",
+    "degradation_profile", "degradation_level", "degradation_domain",
+    "degradation_combination", "synthesis_applied", "degradation_protocol",
+    "gt_interval", "event_type", "event_aliases", "reasoning_target_length",
+    "reasoning_target_source", "duration_sec", "fps", "num_source_frames",
+    "type_annotation", "influence_annotation", "reasoning_annotation",
+    "conclusion_annotation", "answer_annotation"
+  ],
+  "properties": {
+    "video_id": {"type": "string", "minLength": 1},
+    "source_video_id": {"type": "string", "minLength": 1},
+    "source_dataset": {"type": "string", "minLength": 1},
+    "prompt": {"type": "string", "minLength": 1},
+    "degradation_profile": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "prefixItems": [{"type": "string"}, {"enum": [0.2, 0.4, 0.8]}],
+        "minItems": 2,
+        "maxItems": 2
+      }
+    },
+    "degradation_level": {"enum": [0.0, 0.2, 0.4, 0.8]},
+    "degradation_domain": {"enum": ["clean", "synthetic_seen", "synthetic_unseen", "natural"]},
+    "degradation_combination": {"type": "string", "minLength": 1},
+    "synthesis_applied": {"type": "boolean"},
+    "degradation_protocol": {"type": "string", "minLength": 1},
+    "gt_interval": {
+      "type": "array",
+      "prefixItems": [{"type": "number", "minimum": 0}, {"type": "number", "exclusiveMinimum": 0}],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "event_type": {"type": "string", "minLength": 1},
+    "event_aliases": {"type": "array", "items": {"type": "string"}},
+    "reasoning_target_length": {"type": "integer", "minimum": 1},
+    "reasoning_target_source": {"enum": ["human", "human_verified", "deterministic_policy"]},
+    "duration_sec": {"type": "number", "exclusiveMinimum": 0},
+    "fps": {"type": "number", "exclusiveMinimum": 0},
+    "num_source_frames": {"type": "integer", "minimum": 2},
+    "type_annotation": {"type": "string", "minLength": 1},
+    "influence_annotation": {"type": "string", "minLength": 1},
+    "reasoning_annotation": {"type": "string", "minLength": 1},
+    "conclusion_annotation": {"type": "string", "minLength": 1},
+    "answer_annotation": {
+      "type": "string",
+      "pattern": "^event_type: [^;\\[\\]]+; interval: \\[\\d+(?:\\.\\d+)?, \\d+(?:\\.\\d+)?\\]$"
+    }
+  }
+}

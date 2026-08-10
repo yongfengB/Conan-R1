@@ -1,4 +1,4 @@
-# Surv-VAU data contract
+# Surv-VAU data contract and access procedure
 
 The dataset root is:
 
@@ -13,6 +13,12 @@ data/surv_vau/
 Every record includes the event/interval annotation, structured text fields,
 source identity, degradation profile, severity, domain, combination,
 `synthesis_applied`, and `degradation_protocol`.
+
+The exact JSON field contract is `data/annotation.schema.json`. The committed
+`data/demo/` directory is synthetic, redistributable, and executable; it is not
+a sample of restricted surveillance footage and is not evidence for the paper's
+aggregate performance. Its split manifest contains exact SHA256 values for the
+annotations, split assignment, and demo raw predictions.
 
 The four domains have distinct meanings:
 
@@ -61,3 +67,19 @@ python scripts/validate_dataset.py \
 
 Source footage remains subject to its original license, consent, privacy, and
 redistribution terms. This repository does not override those terms.
+
+## Full-data access
+
+Requests for authorized research access may be sent to
+`yongfengbu@chd.edu.cn`, with copies to `lhx@chd.edu.cn` and
+`kongli@xust.edu.cn`. Include affiliation, intended research use, storage and
+access controls, requested source collections, and confirmation that the data
+will not be used for identity inference or legal-liability decisions. Access
+is conditional on each collection's license, privacy review, and redistribution
+authority; third-party footage may need to be obtained from its original
+provider.
+
+A granted data release must include the matching `annotations.jsonl`,
+`splits.json`, and `split_manifest.json`. The code refuses training or
+evaluation when their hashes disagree. Large checkpoints are not bundled here;
+they can be rebuilt with the frozen YAML files and commands in the root README.

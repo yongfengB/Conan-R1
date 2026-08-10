@@ -34,13 +34,6 @@ _CONCLUSION_PROMPT = (
     "judgment about the traffic anomaly:\n{reasoning}"
 )
 
-_ANSWER_PROMPT = (
-    "Based on the following conclusion about a traffic anomaly event, "
-    "provide a benchmark-compatible answer that includes: "
-    "(1) the anomaly type, (2) the temporal interval [start_sec, end_sec], "
-    "and (3) a brief evidence-grounded explanation.\nConclusion: {conclusion}"
-)
-
 _COMPACTNESS_PROMPT = (
     "Rewrite the following reasoning chain to be {length_instruction}. "
     "Preserve all key evidence-to-judgment steps but {action}.\n\nReasoning:\n{reasoning}"
@@ -104,25 +97,6 @@ def generate_reasoning(
     conclusion = model_q.generate(clip.frames, conclusion_prompt)
 
     return reasoning, conclusion
-
-
-def generate_answer(
-    clip: DegradedClip,
-    conclusion: str,
-    model_q: Any,
-) -> str:
-    """Generate <ANSWER> annotation.
-
-    Args:
-        clip: The degraded video clip.
-        conclusion: Previously generated conclusion annotation.
-        model_q: Annotator model.
-
-    Returns:
-        Answer annotation string.
-    """
-    prompt = _ANSWER_PROMPT.format(conclusion=conclusion)
-    return model_q.generate(clip.frames, prompt)
 
 
 def compute_aggregated_severity(profile: DegradationProfile) -> float:

@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "artifact_type": "manuscript_table_reference",
+  "artifact_scope": {
+    "role": "aggregate_table_transcription",
+    "raw_predictions_in_core_release": false,
+    "checkpoint_files_in_core_release": false,
+    "full_dataset_manifest_in_core_release": false,
+    "empirical_reproduction_claim": false
+  },
+  "manuscript": "Conan-R1: Degradation-Aware Structured Reinforcement Learning for Traffic Video Anomaly Understanding",
+  "protocol_id": "surv-vau-degradation-v1",
+  "tables": [
+    {
+      "latex_label": "tab:main_results",
+      "metric_precision": {"BLEU-1": 4, "BLEU-4": 4, "METEOR": 4, "ROUGE-L F1": 4, "tIoU": 4},
+      "rows": [
+        {"latex_row_key": "Video-ChatGPT", "metrics": {"BLEU-1": 0.1578, "BLEU-4": 0.0083, "METEOR": 0.0943, "ROUGE-L F1": 0.0973, "tIoU": 0.1187}},
+        {"latex_row_key": "Video-LLaMA", "metrics": {"BLEU-1": 0.1860, "BLEU-4": 0.0196, "METEOR": 0.1061, "ROUGE-L F1": 0.1108, "tIoU": 0.1152}},
+        {"latex_row_key": "Video-LLaVA", "metrics": {"BLEU-1": 0.1804, "BLEU-4": 0.0278, "METEOR": 0.1147, "ROUGE-L F1": 0.1282, "tIoU": 0.1481}},
+        {"latex_row_key": "InternVL", "metrics": {"BLEU-1": 0.1979, "BLEU-4": 0.0445, "METEOR": 0.1613, "ROUGE-L F1": 0.1804, "tIoU": 0.2564}},
+        {"latex_row_key": "Holmes-VAU", "metrics": {"BLEU-1": 0.2082, "BLEU-4": 0.0589, "METEOR": 0.1972, "ROUGE-L F1": 0.2027, "tIoU": 0.2894}},
+        {"latex_row_key": "VideoLlama3", "metrics": {"BLEU-1": 0.2579, "BLEU-4": 0.0568, "METEOR": 0.2087, "ROUGE-L F1": 0.2134, "tIoU": 0.2949}},
+        {"latex_row_key": "Qwen3-VL", "metrics": {"BLEU-1": 0.2680, "BLEU-4": 0.0657, "METEOR": 0.2187, "ROUGE-L F1": 0.2246, "tIoU": 0.3410}},
+        {"latex_row_key": "LLaVA-NeXT-Video", "metrics": {"BLEU-1": 0.2835, "BLEU-4": 0.0619, "METEOR": 0.2563, "ROUGE-L F1": 0.2607, "tIoU": 0.5937}},
+        {"latex_row_key": "Qwen2.5-VL-3B \\cite", "metrics": {"BLEU-1": 0.2314, "BLEU-4": 0.0527, "METEOR": 0.2059, "ROUGE-L F1": 0.2198, "tIoU": 0.3186}},
+        {"latex_row_key": "Qwen2.5-VL-3B + SFT", "metrics": {"BLEU-1": 0.3198, "BLEU-4": 0.0786, "METEOR": 0.3024, "ROUGE-L F1": 0.3308, "tIoU": 0.4789}},
+        {"latex_row_key": "Conan-R1 (Ours)", "metrics": {"BLEU-1": 0.3857, "BLEU-4": 0.0965, "METEOR": 0.3704, "ROUGE-L F1": 0.3872, "tIoU": 0.6531}}
+      ]
+    },
+    {
+      "latex_label": "tab:degradation_robustness",
+      "metric_precision": {"B1@20": 4, "METEOR@20": 4, "B1@40": 4, "METEOR@40": 4, "B1@80": 4, "METEOR@80": 4},
+      "rows": [
+        {"latex_row_key": "VideoLlama3", "metrics": {"B1@20": 0.1761, "METEOR@20": 0.1704, "B1@40": 0.1547, "METEOR@40": 0.1502, "B1@80": 0.0826, "METEOR@80": 0.1013}},
+        {"latex_row_key": "Qwen3-VL", "metrics": {"B1@20": 0.1918, "METEOR@20": 0.1779, "B1@40": 0.1684, "METEOR@40": 0.1570, "B1@80": 0.0893, "METEOR@80": 0.1080}},
+        {"latex_row_key": "LLaVA-NeXT-Video", "metrics": {"B1@20": 0.2540, "METEOR@20": 0.2131, "B1@40": 0.2316, "METEOR@40": 0.1832, "B1@80": 0.1708, "METEOR@80": 0.1507}},
+        {"latex_row_key": "Qwen2.5-VL-3B &", "metrics": {"B1@20": 0.1905, "METEOR@20": 0.1762, "B1@40": 0.1719, "METEOR@40": 0.1548, "B1@80": 0.1014, "METEOR@80": 0.1035}},
+        {"latex_row_key": "Qwen2.5-VL-3B + SFT", "metrics": {"B1@20": 0.2628, "METEOR@20": 0.2701, "B1@40": 0.2337, "METEOR@40": 0.2418, "B1@80": 0.1596, "METEOR@80": 0.1816}},
+        {"latex_row_key": "Conan-R1 (Ours)", "metrics": {"B1@20": 0.3162, "METEOR@20": 0.3386, "B1@40": 0.2853, "METEOR@40": 0.3027, "B1@80": 0.2339, "METEOR@80": 0.2214}}
+      ]
+    },
+    {
+      "latex_label": "tab:ablation",
+      "metric_precision": {"BLEU-1": 4, "BLEU-4": 4, "METEOR": 4, "ROUGE-L F1": 4, "tIoU": 4},
+      "rows": [
+        {"latex_row_key": "Qwen2.5-VL-3B &", "metrics": {"BLEU-1": 0.2314, "BLEU-4": 0.0527, "METEOR": 0.2059, "ROUGE-L F1": 0.2198, "tIoU": 0.3186}},
+        {"latex_row_key": "+ SFT &", "metrics": {"BLEU-1": 0.3198, "BLEU-4": 0.0786, "METEOR": 0.3024, "ROUGE-L F1": 0.3308, "tIoU": 0.4789}},
+        {"latex_row_key": "+ SFT + $r_d$", "metrics": {"BLEU-1": 0.3487, "BLEU-4": 0.0854, "METEOR": 0.3321, "ROUGE-L F1": 0.3569, "tIoU": 0.5162}},
+        {"latex_row_key": "+ SFT + $r_d + r_l$", "metrics": {"BLEU-1": 0.3615, "BLEU-4": 0.0902, "METEOR": 0.3476, "ROUGE-L F1": 0.3698, "tIoU": 0.5248}},
+        {"latex_row_key": "+ SFT + $r_d + r_e + r_t + r_l$", "metrics": {"BLEU-1": 0.3857, "BLEU-4": 0.0965, "METEOR": 0.3704, "ROUGE-L F1": 0.3872, "tIoU": 0.6531}}
+      ]
+    },
+    {
+      "latex_label": "tab:wts_zeroshot",
+      "metric_precision": {"BLEU-1": 4, "BLEU-4": 4, "METEOR": 4, "ROUGE-L": 4, "CIDEr": 4, "Acc": 1},
+      "rows": [
+        {"latex_row_key": "LLaVA-NeXT-Video-7B", "metrics": {"BLEU-1": 0.2476, "BLEU-4": 0.0869, "METEOR": 0.1638, "ROUGE-L": 0.2367, "CIDEr": 0.3912, "Acc": 42.8}},
+        {"latex_row_key": "Qwen2.5-VL-3B (Base)", "metrics": {"BLEU-1": 0.2613, "BLEU-4": 0.0946, "METEOR": 0.1708, "ROUGE-L": 0.2442, "CIDEr": 0.4285, "Acc": 44.1}},
+        {"latex_row_key": "Qwen2.5-VL-3B + SFT", "metrics": {"BLEU-1": 0.2901, "BLEU-4": 0.1157, "METEOR": 0.1929, "ROUGE-L": 0.2723, "CIDEr": 0.5170, "Acc": 48.9}},
+        {"latex_row_key": "Conan-R1 &", "metrics": {"BLEU-1": 0.3142, "BLEU-4": 0.1358, "METEOR": 0.2113, "ROUGE-L": 0.2950, "CIDEr": 0.6031, "Acc": 53.7}}
+      ]
+    }
+  ]
+}

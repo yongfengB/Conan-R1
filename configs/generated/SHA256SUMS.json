@@ -6,8 +6,5 @@
   "configs/generated/without_rt.yaml": "c70de1814c642bcb55ba6288654d496ca4b06712df1d9dc51ac5f941e6d544f7",
   "configs/generated/without_rl.yaml": "32fc4ebeb13f1cff0bb7402ae862110fc48cb7416158c236adbe421314d3865e",
   "configs/generated/fixed_length_rl.yaml": "acb0cddb7d136a582f3cabe2218cbb6b44f44489819c05fe389f436d727f489c",
-  "configs/generated/weights_degradation_heavy.yaml": "764256fb5e65926b48262d03e47b2a0e65227c41317b14d54ff74cb190d00970",
-  "configs/generated/weights_task_heavy.yaml": "0dbefaf9c691c3339382e755155f319b464382fd8142dacf85a23247f60f392f",
-  "configs/generated/weights_no_length_emphasis.yaml": "259bc4b8a8be2e18e991d1032e311f5c2f022f6cee0a93f0578334cc80c14b21",
   "configs/generated/without_type_influence.yaml": "175fe1acf3acd1e960524904c642a46f2a4c0fcc0bfd7f376d50f1b301dba6c3"
 }

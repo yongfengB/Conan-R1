@@ -1,57 +1,36 @@
-# Reproducibility contract
+# Reproducibility and provenance contract
 
-The repository separates three reproducible artifacts:
+This is a core reference implementation, not a self-contained full-scale
+reproduction package.
 
-1. **Method implementation** — fixed model, LoRA, SFT, token-level GRPO,
-   bounded rewards, parser, metrics, and checkpoint state.
-2. **Degradation generation** — a versioned operator protocol with explicit
-   maxima, `K` distribution, composition rule, trajectory inputs, and
-   video-level stochastic seed.
-3. **Manuscript results** — `results/paper_results.json`, checked row by row
-   against the LaTeX tables by `scripts/check_manuscript_sync.py`.
+Three artifact classes are kept separate:
 
-## Run identity
+1. **Core method audit**: source, configs, schema, parser, evaluator, tests, and
+   degradation protocol are included.
+2. **Executable demo audit**: synthetic videos, annotations, split manifest,
+   raw predictions, and exact SHA256 identities are included.
+3. **Manuscript numerical audit**: aggregate table JSON is included, while the
+   paper-scale raw predictions, checkpoint files, and full-data split manifest
+   are external to this release.
 
-Every evaluation JSON records:
+Every new training or evaluation run must record:
 
-- the code revision;
-- annotation and split SHA256 hashes;
-- checkpoint SHA256 where applicable;
-- the resolved model and decoding protocol;
-- raw per-sample output and parsing status;
-- degradation domain, level, and combination.
+- `git rev-parse HEAD` for the code revision;
+- `annotations.jsonl`, `splits.json`, and `split_manifest.json` SHA256 values;
+- LoRA checkpoint filename and SHA256;
+- resolved YAML and its SHA256;
+- Python, PyTorch, CUDA, GPU, command, seed, and decoding settings;
+- raw output, parse status, event label, interval, and per-sample metrics.
 
-## Data identity
+The command-line runners implement this contract through
+`scripts/_common.py`. A numerical table is independently auditable only when
+its aggregate JSON can be traced to the corresponding raw outputs and all
+three code/data/checkpoint identities.
 
-`scripts/validate_dataset.py` enforces:
-
-- 3,688 immutable source-video identities and 27,647 instances;
-- source-level 70/15/15 train/validation/test isolation;
-- disjoint 30/70 SFT/GRPO training sources;
-- valid timestamps and source-video metadata;
-- paired 0/20/40/80 severity coverage;
-- separate `clean`, `synthetic_seen`, `synthetic_unseen`, and `natural`
-  domains;
-- no synthetic-unseen or natural records in a training split;
-- `synthesis_applied=false` for natural observations;
-- matching annotation/split hashes.
-
-## Numerical identity
-
-The manuscript reference is deterministic and immutable within a release:
+The manuscript parity command
 
 ```bash
 python scripts/check_manuscript_sync.py ../../sections/06_experiments.tex
 ```
 
-Evaluation outputs can be frozen with `scripts/create_release_reference.py`
-and compared with `scripts/verify_reproduction.py`. The comparison accepts
-only matching code, annotation, and split identities.
-
-## Claim boundary
-
-The 20/40/80 table uses `synthetic_seen` operators. The evaluator produces
-separate summaries for `synthetic_unseen` and `natural`; none of these domains
-is silently relabeled as another. Text-overlap scores evaluate agreement with
-the stored reference response and are not used alone as evidence of causal
-faithfulness.
+checks transcription parity, not empirical provenance.

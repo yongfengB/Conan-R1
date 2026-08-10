@@ -21,8 +21,8 @@ STRUCTURED_OUTPUT_INSTRUCTION = (
     "<INFLUENCE>effect on observable evidence<INFLUENCE_END>"
     "<REASONING>evidence-grounded explanation<REASONING_END>"
     "<CONCLUSION>compact event judgment<CONCLUSION_END>"
-    "<ANSWER>event_type: LABEL; interval: [start_sec, end_sec]; "
-    "explanation: TEXT<ANSWER_END>."
+    "<ANSWER>event_type: LABEL; interval: [start_sec, end_sec]<ANSWER_END>. "
+    "The ANSWER block must contain exactly one interval."
 )
 
 

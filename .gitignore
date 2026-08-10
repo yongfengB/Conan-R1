@@ -6,9 +6,12 @@ __pycache__/
 checkpoints/
 data/surv_vau/
 results/*.json
+results/*.jsonl
 results/*.csv
-!results/paper_reported_pre_revision.json
-human_evaluation/private_key.jsonl
-human_evaluation/ratings.jsonl
+!results/paper_results.json
+!results/demo_raw_predictions.jsonl
+!results/demo_dataset_validation.json
+!results/demo_evaluation.json
+!results/artifact_inventory.json
 *.log
 .DS_Store

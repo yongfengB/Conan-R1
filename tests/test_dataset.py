@@ -1,6 +1,8 @@
-"""Unit tests for dataset types, validation, and split logic."""
+"""Unit tests for dataset types, validation, split logic, and builder closure."""
+import numpy as np
 import pytest
 from dataset.types import (
+    DegradedClip,
     DegradationProfile,
     ObjectTrack,
     StructuredSample,
@@ -10,6 +12,8 @@ from dataset.types import (
 )
 from dataset.builder import SurvVAUBuilder
 from dataset.video_utils import uniform_sample_indices, uniform_sample_timestamps
+from evaluation.metrics import compute_tiou
+from model.parser import extract_temporal_interval, parse_structured_output
 
 
 def _make_sample(**kwargs) -> StructuredSample:
@@ -176,6 +180,67 @@ class TestSurvVAUBuilderValidation:
         )
         assert isinstance(tracks[0], ObjectTrack)
         assert tracks[0].box_at(1) == pytest.approx((0.2, 0.2, 0.4, 0.4))
+
+    def test_builder_parser_tiou_closed_loop_has_one_answer_interval(self):
+        class DummyAnnotator:
+            def __init__(self):
+                self.outputs = iter(
+                    [
+                        "Blur weakens edge evidence.",
+                        "The model-authored reasoning mentions [0.1, 0.2].",
+                        "The conclusion also mentions from 0.1 to 0.2 sec.",
+                        "Compact reasoning retained.",
+                    ]
+                )
+
+            def generate(self, frames, prompt):
+                return next(self.outputs)
+
+        frames = [np.zeros((16, 16, 3), dtype=np.uint8) for _ in range(4)]
+        profile = DegradationProfile(factors=[], difficulty_level=0.0)
+        source = VideoClip(
+            video_id="demo",
+            source_video_id="demo",
+            source_dataset="synthetic_demo",
+            frames=frames,
+            start_frame=0,
+            end_frame=3,
+            start_sec=0.5,
+            end_sec=1.5,
+            event_type="rear-end collision",
+            degradation_profiles=[profile],
+            fps=2.0,
+            duration_sec=2.0,
+        )
+        degraded = DegradedClip(
+            video_id="demo__clean",
+            frames=frames,
+            start_sec=0.5,
+            end_sec=1.5,
+            profile=profile,
+            source_clip=source,
+        )
+        sample = SurvVAUBuilder(DummyAnnotator())._annotate(degraded, profile)
+        assert sample is not None
+        assert sample.answer_annotation == (
+            "event_type: rear-end collision; interval: [0.500, 1.500]"
+        )
+        raw_output = (
+            f"<TYPE>{sample.type_annotation}<TYPE_END>"
+            f"<INFLUENCE>{sample.influence_annotation}<INFLUENCE_END>"
+            f"<REASONING>{sample.reasoning_annotation}<REASONING_END>"
+            f"<CONCLUSION>{sample.conclusion_annotation}<CONCLUSION_END>"
+            f"<ANSWER>{sample.answer_annotation}<ANSWER_END>"
+        )
+        parsed = parse_structured_output(raw_output)
+        assert parsed is not None
+        interval = extract_temporal_interval(parsed.answer_block)
+        assert interval == pytest.approx((0.5, 1.5))
+        assert compute_tiou(interval, sample.gt_interval, 2.0) == pytest.approx(1.0)
+
+    def test_answer_serializer_rejects_reserved_delimiters(self):
+        with pytest.raises(ValueError):
+            self.builder.serialize_answer("collision; interval: [1, 2]", (1.0, 2.0))
 
 
 class TestSplitDataset:
