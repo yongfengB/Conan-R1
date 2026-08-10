@@ -172,7 +172,7 @@ def require_dataset(data_dir: str) -> None:
     ]
     if missing:
         raise FileNotFoundError(
-            "Surv-VAU is incomplete. Missing: "
+            "Surv-VAU is missing required files: "
             + ", ".join(missing)
             + ". Follow data/README.md before training."
         )

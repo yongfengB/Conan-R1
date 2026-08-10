@@ -95,6 +95,12 @@ def test_coverage_requires_natural_and_unseen_domains():
             "source_video_id": "source-1",
             "degradation_level": level,
             "degradation_domain": domain,
+            "synthesis_applied": domain.startswith("synthetic_"),
+            "degradation_protocol": (
+                "source_observation"
+                if domain == "natural"
+                else "surv-vau-degradation-v1"
+            ),
         }
         for level, domain in (
             (0.0, "clean"),

@@ -19,7 +19,10 @@ from .types import (
     SEVERITY_LEVELS,
     DegradationProfile,
     DegradedClip,
+    InteractionRegion,
+    ObjectTrack,
     StructuredSample,
+    TrackBox,
     VideoClip,
     VideoLoadError,
 )
@@ -92,11 +95,85 @@ class SurvVAUBuilder:
                 factors.append((name, severity))
             level = float(raw_profile.get("degradation_level", 0.0))
             profiles.append(
-                DegradationProfile(factors=factors, difficulty_level=level)
+                DegradationProfile(
+                    factors=factors,
+                    difficulty_level=level,
+                    domain=str(
+                        raw_profile.get(
+                            "degradation_domain",
+                            "synthetic_seen" if factors else "clean",
+                        )
+                    ),
+                )
             )
         if not any(not profile.factors for profile in profiles):
             raise ValueError(f"{video_id}: a clean 0% profile is required")
         return profiles
+
+    @staticmethod
+    def _parse_track_boxes(raw_boxes: Any, owner: str) -> List[TrackBox]:
+        if not isinstance(raw_boxes, list) or not raw_boxes:
+            raise ValueError(f"{owner}: boxes must be a non-empty list")
+        boxes = []
+        for raw_box in raw_boxes:
+            if not isinstance(raw_box, dict):
+                raise ValueError(f"{owner}: each tracked box must be an object")
+            coordinates = raw_box.get("bbox_norm", raw_box.get("bbox"))
+            if not isinstance(coordinates, (list, tuple)) or len(coordinates) != 4:
+                raise ValueError(f"{owner}: bbox_norm must contain four values")
+            boxes.append(
+                TrackBox(
+                    frame_index=int(raw_box["frame_index"]),
+                    bbox=tuple(float(value) for value in coordinates),
+                )
+            )
+        return boxes
+
+    @classmethod
+    def _parse_object_tracks(cls, raw_tracks: Any, video_id: str) -> List[ObjectTrack]:
+        if raw_tracks is None:
+            return []
+        if not isinstance(raw_tracks, list):
+            raise ValueError(f"{video_id}: object_tracks must be a list")
+        tracks = []
+        for raw_track in raw_tracks:
+            if not isinstance(raw_track, dict):
+                raise ValueError(f"{video_id}: each object track must be an object")
+            track_id = str(raw_track.get("track_id", "")).strip()
+            tracks.append(
+                ObjectTrack(
+                    track_id=track_id,
+                    category=str(raw_track.get("category", "")).strip(),
+                    event_relevant=bool(raw_track.get("event_relevant", True)),
+                    boxes=cls._parse_track_boxes(
+                        raw_track.get("boxes"), f"{video_id}:{track_id}"
+                    ),
+                )
+            )
+        return tracks
+
+    @classmethod
+    def _parse_interaction_regions(
+        cls, raw_regions: Any, video_id: str
+    ) -> List[InteractionRegion]:
+        if raw_regions is None:
+            return []
+        if not isinstance(raw_regions, list):
+            raise ValueError(f"{video_id}: interaction_regions must be a list")
+        regions = []
+        for raw_region in raw_regions:
+            if not isinstance(raw_region, dict):
+                raise ValueError(f"{video_id}: each interaction region must be an object")
+            region_id = str(raw_region.get("region_id", "")).strip()
+            regions.append(
+                InteractionRegion(
+                    region_id=region_id,
+                    boxes=cls._parse_track_boxes(
+                        raw_region.get("boxes"), f"{video_id}:{region_id}"
+                    ),
+                )
+            )
+        return regions
 
     def collect_and_segment(
         self,
@@ -162,6 +239,12 @@ class SurvVAUBuilder:
                         event_type=event_type,
                         event_aliases=list(ann.get("event_aliases", [])),
                         degradation_profiles=degradation_profiles,
+                        object_tracks=self._parse_object_tracks(
+                            ann.get("object_tracks"), video_id
+                        ),
+                        interaction_regions=self._parse_interaction_regions(
+                            ann.get("interaction_regions"), video_id
+                        ),
                         fps=fps,
                         duration_sec=duration_sec,
                     )
@@ -249,6 +332,8 @@ class SurvVAUBuilder:
                     f"{generated_explanation.strip()}"
                 ),
                 split="",  # assigned later
+                synthesis_metadata=degraded.synthesis_metadata,
+                degradation_domain=profile.domain,
             )
             return sample
         except Exception as e:
@@ -347,7 +432,7 @@ class SurvVAUBuilder:
         for clip in clips:
             profiles = self._build_profiles(clip)
             for profile in profiles:
-                degraded = synthesize_degradation(clip, profile)
+                degraded = synthesize_degradation(clip, profile, seed=self.seed)
                 degraded.video_id = f"{clip.video_id}__{self._profile_suffix(profile)}"
                 sample = self._annotate(degraded, profile)
                 if sample is None:

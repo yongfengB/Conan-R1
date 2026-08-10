@@ -89,13 +89,18 @@ def main() -> None:
                     "degradation_profile": sample.degradation_profile,
                     "degradation_level": sample.difficulty_level,
                     "degradation_domain": (
-                        "clean"
-                        if sample.difficulty_level == 0.0
-                        else "synthetic_seen"
+                        sample.degradation_domain
                     ),
                     "degradation_combination": "+".join(
                         factor for factor, _ in sample.degradation_profile
                     ) or "none",
+                    "synthesis_applied": sample.degradation_domain.startswith(
+                        "synthetic_"
+                    ),
+                    "degradation_protocol": sample.synthesis_metadata.get(
+                        "protocol", "surv-vau-degradation-v1"
+                    ),
+                    "synthesis_metadata": sample.synthesis_metadata,
                     "gt_interval": list(sample.gt_interval),
                     "event_type": sample.event_type,
                     "event_aliases": sample.event_aliases,

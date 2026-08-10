@@ -43,11 +43,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default=None)
     parser.add_argument("--wts", action="store_true", help="Include CIDEr/VQA metrics")
-    parser.add_argument(
-        "--allow_incomplete_robustness",
-        action="store_true",
-        help="Permit preliminary evaluation without all required domains/levels",
-    )
     parser.add_argument("--output", default="results/evaluation.json")
     return parser.parse_args()
 
@@ -96,13 +91,8 @@ def main() -> None:
     metrics, per_sample = Evaluator().evaluate(
         predictions, references, include_wts_metrics=args.wts
     )
-    coverage = None
-    try:
-        coverage = validate_robustness_coverage(per_sample)
-    except ValueError:
-        if not args.allow_incomplete_robustness:
-            raise
-    robustness = summarize_robustness(per_sample)
+    coverage = None if args.wts else validate_robustness_coverage(per_sample)
+    robustness = {} if args.wts else summarize_robustness(per_sample)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with open(output, "w", encoding="utf-8") as handle:
@@ -118,7 +108,7 @@ def main() -> None:
                     "max_new_tokens": args.max_new_tokens,
                     "decoding": "greedy",
                     "seed": args.seed,
-                    "complete_robustness_coverage": coverage is not None,
+                    "complete_robustness_coverage": None if args.wts else True,
                 },
                 "metrics": metrics,
                 "robustness_coverage": coverage,

@@ -24,7 +24,17 @@ def validate_robustness_coverage(
     level_sources = defaultdict(set)
     for row in rows:
         level_counts[float(row["degradation_level"])] += 1
-        domain_counts[str(row["degradation_domain"])] += 1
+        domain = str(row["degradation_domain"])
+        domain_counts[domain] += 1
+        synthetic = domain.startswith("synthetic_")
+        if bool(row.get("synthesis_applied", False)) != synthetic:
+            raise ValueError(
+                f"Domain {domain!r} is inconsistent with synthesis_applied."
+            )
+        if domain == "natural" and row.get("degradation_protocol") != "source_observation":
+            raise ValueError(
+                "Natural robustness rows must be source observations, not operator outputs."
+            )
         source_id = str(row.get("source_video_id", ""))
         if not source_id:
             raise ValueError("Robustness rows require source_video_id.")

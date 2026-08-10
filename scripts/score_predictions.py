@@ -26,7 +26,6 @@ def main() -> None:
     parser.add_argument("--data_dir", default="data/surv_vau")
     parser.add_argument("--split", default="test")
     parser.add_argument("--wts", action="store_true")
-    parser.add_argument("--allow_incomplete_robustness", action="store_true")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
@@ -53,12 +52,7 @@ def main() -> None:
     metrics, details = Evaluator().evaluate(
         predictions, references, include_wts_metrics=args.wts
     )
-    coverage = None
-    try:
-        coverage = validate_robustness_coverage(details)
-    except ValueError:
-        if not args.allow_incomplete_robustness:
-            raise
+    coverage = None if args.wts else validate_robustness_coverage(details)
     payload = {
         "protocol": {
             "model_name": args.model_name or Path(args.predictions_jsonl).stem,
@@ -67,7 +61,7 @@ def main() -> None:
             "decoding": "provided by external system; must be documented",
         },
         "metrics": metrics,
-        "robustness": summarize_robustness(details),
+        "robustness": {} if args.wts else summarize_robustness(details),
         "robustness_coverage": coverage,
         "per_sample": [
             {**row, "raw_output": raw_output}

@@ -88,6 +88,12 @@ class Evaluator:
                     "degradation_combination": reference.get(
                         "degradation_combination", "single_or_seen"
                     ),
+                    "synthesis_applied": bool(
+                        reference.get("synthesis_applied", False)
+                    ),
+                    "degradation_protocol": reference.get(
+                        "degradation_protocol", "source_observation"
+                    ),
                 }
             )
 

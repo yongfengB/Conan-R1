@@ -2,6 +2,7 @@
 import pytest
 from dataset.types import (
     DegradationProfile,
+    ObjectTrack,
     StructuredSample,
     VideoClip,
     VideoLoadError,
@@ -157,6 +158,24 @@ class TestSurvVAUBuilderValidation:
                 ],
                 "source_001",
             )
+
+    def test_parses_normalized_object_trajectories(self):
+        tracks = self.builder._parse_object_tracks(
+            [
+                {
+                    "track_id": "vehicle-7",
+                    "category": "vehicle",
+                    "event_relevant": True,
+                    "boxes": [
+                        {"frame_index": 0, "bbox_norm": [0.1, 0.2, 0.3, 0.4]},
+                        {"frame_index": 2, "bbox_norm": [0.3, 0.2, 0.5, 0.4]},
+                    ],
+                }
+            ],
+            "source_001",
+        )
+        assert isinstance(tracks[0], ObjectTrack)
+        assert tracks[0].box_at(1) == pytest.approx((0.2, 0.2, 0.4, 0.4))
 
 
 class TestSplitDataset:

@@ -22,15 +22,10 @@ def main() -> None:
     parser.add_argument(
         "--output", default="results/robustness_summary.json"
     )
-    parser.add_argument("--allow_incomplete", action="store_true")
     args = parser.parse_args()
     payload = json.loads(Path(args.evaluation_json).read_text(encoding="utf-8"))
     rows = payload.get("per_sample", [])
-    try:
-        validate_robustness_coverage(rows)
-    except ValueError:
-        if not args.allow_incomplete:
-            raise
+    validate_robustness_coverage(rows)
     report = summarize_robustness(rows)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

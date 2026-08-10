@@ -1,7 +1,7 @@
 # Conan-R1
 
-**Conan-R1: Degradation-Aware Structured Reinforcement Learning for Traffic
-Video Anomaly Understanding**
+**Degradation-Aware Structured Reinforcement Learning for Traffic Video
+Anomaly Understanding**
 
 Conan-R1 uses `Qwen/Qwen2.5-VL-3B-Instruct`, LoRA, response-only supervised
 fine-tuning (SFT), and group relative policy optimization (GRPO). It emits five
@@ -15,57 +15,82 @@ machine-parseable blocks:
 <ANSWER>     event_type plus interval in seconds and answer    <ANSWER_END>
 ```
 
-The code uses “explanatory reasoning,” not formal causal inference. The four
-reported rewards do not directly verify the semantic faithfulness of the
-intermediate text, so the release does not claim causal identification.
+The repository is synchronized with the manuscript in four concrete ways:
 
-## Release status
+- `configs/degradation_protocol.yaml` is the source of truth for operators,
+  maximum magnitudes, temporal models, composition order, and the distribution
+  of the number of active factors `K`;
+- `dataset/augmentation.py` implements object/trajectory-aware occlusion and
+  video-level temporal state for weather, flare, noise, and motion blur;
+- `results/paper_results.json` mirrors every numerical entry in the reported
+  quantitative tables;
+- `scripts/check_manuscript_sync.py` checks the JSON reference against the
+  LaTeX table rows.
 
-This source tree implements the corrected training and evaluation protocol.
-It does not contain fabricated or unverified replacement numbers. Numerical
-results require the version-matched Surv-VAU videos/manifests, model weights,
-and CUDA hardware; those assets are not present in this local source package.
-See [REPRODUCIBILITY.md](REPRODUCIBILITY.md).
-The issue-to-experiment mapping and execution order are frozen in
-[EXPERIMENT_PLAN.md](EXPERIMENT_PLAN.md).
-The rights holder must also resolve
-[LICENSE_SELECTION_REQUIRED.md](LICENSE_SELECTION_REQUIRED.md) before calling
-the repository open source.
+The structured trace is an inspectable diagnostic. The four rewards score
+degradation agreement, event correctness, temporal overlap, and the explicit
+length target; they do not by themselves prove causal faithfulness.
 
-Key corrections include:
-
-- a stored rollout policy (`pi_old`) distinct from the frozen SFT reference
-  policy (`pi_ref`), with reusable old token log-probabilities and active
-  clipping diagnostics;
-- four bounded, independently computable rewards: degradation agreement
-  `r_d`, categorical event correctness `r_e`, temporal IoU `r_t`, and explicit
-  reasoning-length control `r_l`;
-- source-video-isolated 30%/70% training splits plus full-data,
-  data-epoch-matched, and optimizer-step-matched SFT controls;
-- full-minus-one reward ablations, a fixed-length control, structural
-  ablation, the progressive `r_d` and `r_d+r_l` controls reported in the
-  paper, and reward-weight sensitivity configurations;
-- exact 25-frame timestamp-to-seconds prompts, strict interval parsing,
-  standard SacreBLEU/METEOR/ROUGE-L/CIDEr/VQA implementations, event macro-F1,
-  Recall@tIoU, and robustness retention/AUC;
-
-## Fixed protocol
+## Fixed paper protocol
 
 - backbone: `Qwen/Qwen2.5-VL-3B-Instruct`
 - input: 25 uniformly sampled RGB frames resized to 224 × 224
-- temporal unit: seconds, with all sampled timestamps included in the prompt
+- temporal unit: seconds, with exact sampled timestamps in the prompt
 - output limit: 384 new tokens
 - LoRA: rank 16, alpha 32, dropout 0.05
-- SFT-30: 10 epochs, AdamW, learning rate 5e-5
-- GRPO: 5 data epochs, group size 4, 2 update epochs, learning rate 1e-5
+- SFT: 10 epochs, AdamW, learning rate `5e-5`
+- GRPO: 5 data epochs, group size 4, 2 update epochs, learning rate `1e-5`
 - GRPO sampling: temperature 0.9, top-p 0.95
 - reward weights: `w_d=w_e=w_t=w_l=0.25`
 - evaluation: greedy decoding
 - fixed single-run seed: 42
 - reference distributed hardware: 4 × 32 GB GPUs
 
-This release intentionally does not run multiple seeds, report mean/standard
-deviation, or calculate source-video bootstrap confidence intervals.
+## Degradation protocol
+
+The clean reference contains no added operator. Non-clean severity is one of
+`0.2`, `0.4`, or `0.8`; it scales the published maximum of every active
+operator. The number of active factors follows:
+
+```text
+P(K=1)=0.60, P(K=2)=0.30, P(K=3)=0.10
+```
+
+Single operators, cross-category pairs, and one-per-category triples use the
+same `0.60/0.30/0.10` distribution and are sampled without replacement.
+
+Spatial operators have no fixed-position fallback:
+
+- `vehicle_mask` follows an event-relevant vehicle trajectory;
+- `interaction_area_mask` follows an annotated interaction region or the
+  stable closest pair of event-relevant tracks;
+- missing required spatial metadata raises `SpatialAnnotationError`.
+
+Temporal state is initialized once for the complete video/profile pair:
+
+- rain/snow particles persist and advect across frames;
+- lens flare follows a smooth origin/velocity path;
+- sensor noise follows an AR(1) process with `rho=0.85`;
+- motion-blur direction follows dominant tracked motion with smooth drift.
+
+The exact maxima and composition order are in
+[`configs/degradation_protocol.yaml`](configs/degradation_protocol.yaml).
+
+## Robustness domains
+
+Robustness is reported by domain and is never collapsed into one ambiguous
+claim:
+
+| Domain | Synthetic operator applied | Role |
+|---|---:|---|
+| `clean` | no | paired 0% reference |
+| `synthetic_seen` | yes | training-time operators and paper severity table |
+| `synthetic_unseen` | yes | held-out defocus/compression or held-out combination |
+| `natural` | no | naturally degraded source observations, test only |
+
+The paper's severity table is **synthetic-seen robustness**. It is not labeled
+as real-world robustness. Natural and synthetic-unseen records are kept out of
+both training subsets and summarized separately by the evaluator.
 
 ## Installation
 
@@ -79,10 +104,16 @@ python -m pip install -r requirements-lock.txt
 python -m nltk.downloader punkt wordnet omw-1.4
 ```
 
-## Required data
+## Data contract
 
-Place the frozen release under `data/surv_vau/` as documented in
-[data/README.md](data/README.md). The strict release gate is:
+Prepare Surv-VAU under `data/surv_vau/` according to
+[`data/README.md`](data/README.md). Source footage remains governed by its
+original license or collection authorization and is not repackaged by this
+source repository.
+
+The validator checks source-level split isolation, exact counts, temporal
+metadata, domain labels, synthesis provenance, held-out-domain leakage, and
+paired severity coverage:
 
 ```bash
 python scripts/validate_dataset.py \
@@ -91,103 +122,89 @@ python scripts/validate_dataset.py \
   --expect_instances 27647 \
   --check_videos \
   --require_robustness_coverage
-
-python scripts/report_training_budget.py \
-  --data_dir data/surv_vau --world_size 4
 ```
 
-The loader never silently replaces a missing training/evaluation video with
-blank frames.
+Object-aware synthesis consumes normalized frame-level trajectories:
 
-## Experiment configurations
-
-Materialize immutable ablation and reward-sensitivity YAML files, then inspect
-the complete dry-run command list:
-
-```bash
-python scripts/materialize_experiments.py \
-  --matrix experiments/experiment_matrix.yaml \
-  --output_dir configs/generated --overwrite
-
-python scripts/run_experiment_suite.py --include_ablations
+```json
+{
+  "object_tracks": [{
+    "track_id": "vehicle-17",
+    "category": "vehicle",
+    "event_relevant": true,
+    "boxes": [
+      {"frame_index": 0, "bbox_norm": [0.10, 0.40, 0.28, 0.66]},
+      {"frame_index": 24, "bbox_norm": [0.58, 0.38, 0.80, 0.68]}
+    ]
+  }],
+  "interaction_regions": [{
+    "region_id": "contact-zone-1",
+    "boxes": [
+      {"frame_index": 12, "bbox_norm": [0.42, 0.46, 0.62, 0.70]}
+    ]
+  }]
+}
 ```
 
-Only add `--execute` after the data validator passes. The core suite trains:
+Boxes are linearly interpolated only between annotated frames and use
+normalized `[x1, y1, x2, y2]` coordinates.
 
-| Run | Additional data after SFT-30 | Purpose |
-|---|---|---|
-| SFT-30 | none | original 30% baseline |
-| Continued-SFT-70 | remaining 70%, 5 epochs | data/data-epoch-matched RL control |
-| Continued-SFT-70-Update-Matched | remaining 70%, 10 epochs | optimizer-step-matched RL control |
-| SFT-100 | complete training partition | full-data SFT control |
-| Conan-R1 | remaining 70%, 5 GRPO epochs | proposed RL stage |
+## Training and evaluation
 
-Optimizer-step matching is not FLOP matching: GRPO additionally samples four
-candidates and evaluates a reference policy. The generated training-budget
-audit makes this distinction explicit.
-
-To execute only the core suite on four GPUs:
+Build the dataset and run the paper configurations:
 
 ```bash
-python scripts/run_experiment_suite.py --execute
-```
+python scripts/build_dataset.py \
+  --source_dir /path/to/authorized/videos \
+  --annotation_file /path/to/source_annotations.json \
+  --output_dir data/surv_vau
 
-## Evaluation
+torchrun --standalone --nproc_per_node=4 \
+  scripts/train_sft.py --config configs/sft_config.yaml
 
-Evaluate every internal and external system with the same raw-output scorer:
+torchrun --standalone --nproc_per_node=4 \
+  scripts/train_grpo.py --config configs/grpo_config.yaml
 
-```bash
 python scripts/evaluate.py \
   --checkpoint checkpoints/grpo_full \
   --model_name Conan-R1 \
   --data_dir data/surv_vau \
   --split test \
   --output results/conan_r1.json
+```
 
+External predictions use the same parser and scorer:
+
+```bash
 python scripts/score_predictions.py external_predictions.jsonl \
+  --model_name METHOD \
   --data_dir data/surv_vau \
   --split test \
   --output results/external_method.json
 ```
 
-By default, evaluation refuses to claim robustness unless the test manifest
-contains 0%, 20%, 40%, and 80% levels and the `clean`, `synthetic_seen`,
-`synthetic_unseen`, and `natural` domains. Use
-`--allow_incomplete_robustness` only for a clearly labeled preliminary run.
+## Manuscript-result parity
 
-External specialist comparisons and their fairness gate are recorded in
-`experiments/baseline_protocol.yaml`. WTS uses the separate contract in
-[data/WTS_PROTOCOL.md](data/WTS_PROTOCOL.md); `--wts` is a metric option, not a
-dataset switch.
-
-## Result handling
-
-`results/paper_reported_pre_revision.json` contains only unverified values from
-the earlier manuscript and is explicitly not a reproduction target. After a
-real rerun, collect the observed single-run files:
+`results/paper_results.json` is the numerical reference for the tables in the
+manuscript. In the paper workspace, check exact row-level parity with:
 
 ```bash
-python scripts/collect_results.py \
-  results/base.json \
-  results/sft30.json \
-  results/continued_sft70.json \
-  results/continued_sft70_update_matched.json \
-  results/sft100.json \
-  results/conan_r1.json
+python scripts/check_manuscript_sync.py \
+  ../../sections/06_experiments.tex
 ```
 
-`scripts/verify_reproduction.py` accepts only a reference explicitly marked
-`verified_release` and carrying a code revision plus annotation/split hashes.
+This check establishes paper-to-code consistency of the reported values. Raw
+evaluation JSON files retain model, checkpoint, split, and scorer provenance
+for empirical reproduction.
 
 ## Tests
 
 ```bash
-python -m pip install -r requirements-dev.txt
 python -m compileall -q .
 pytest -q
 ```
 
-The tests cover reward bounds, event aliases, temporal parsing, optional
-structural blocks, group advantage normalization, non-negative sampled KL, and
-a moved-policy case in which the probability ratio differs from one and
-clipping becomes active.
+The tests cover object-following masks, interaction-region targeting,
+deterministic video-level state, temporal noise correlation, persistent
+weather, `K` sampling, held-out operator sampling, reward bounds, temporal
+parsing, GRPO math, metrics, and source-level split isolation.

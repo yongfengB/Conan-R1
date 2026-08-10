@@ -18,18 +18,23 @@ EXCLUDED_PARTS = {
     "checkpoints",
 }
 EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".DS_Store"}
+EXCLUDED_NAMES = {".DS_Store"}
 
 
 def included(path: Path, root: Path) -> bool:
     relative = path.relative_to(root)
     if any(part in EXCLUDED_PARTS for part in relative.parts):
         return False
-    if path.suffix in EXCLUDED_SUFFIXES or path.name == "MANIFEST.sha256":
+    if (
+        path.suffix in EXCLUDED_SUFFIXES
+        or path.name in EXCLUDED_NAMES
+        or path.name == "MANIFEST.sha256"
+    ):
         return False
     if relative.parts[:2] == ("data", "surv_vau"):
         return False
     if relative.parts and relative.parts[0] == "results":
-        return path.name in {"README.md", "paper_reported_pre_revision.json"}
+        return path.name in {"README.md", "paper_results.json"}
     return True
 
 
@@ -41,7 +46,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--output",
-        default="../Conan-R1-corrected-code-2026-07-29.zip",
+        default="../Conan-R1-paper-synchronized-code-2026-08-10.zip",
     )
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
@@ -73,7 +78,7 @@ def main() -> None:
         for relative, payload in sorted(archive_entries):
             info = zipfile.ZipInfo(
                 filename=f"Conan-R1/{relative}",
-                date_time=(2026, 7, 29, 0, 0, 0),
+                date_time=(2026, 8, 10, 0, 0, 0),
             )
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = (0o755 if relative.startswith("scripts/") else 0o644) << 16

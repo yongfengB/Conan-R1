@@ -145,6 +145,10 @@ class SurvVAUDataset(Dataset):
             "degradation_combination": obj.get(
                 "degradation_combination", "single_or_seen"
             ),
+            "synthesis_applied": bool(obj.get("synthesis_applied", False)),
+            "degradation_protocol": obj.get(
+                "degradation_protocol", "source_observation"
+            ),
             "type_annotation": obj.get("type_annotation", ""),
             "influence_annotation": obj.get("influence_annotation", ""),
             "reasoning_annotation": obj.get("reasoning_annotation", ""),

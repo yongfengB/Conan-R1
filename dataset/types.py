@@ -12,6 +12,8 @@ DEGRADATION_FACTORS = {
     "local_occlusion": ["vehicle_mask", "interaction_area_mask"],
     "evidence_quality": ["motion_blur", "lens_flare", "sensor_noise"],
     "environmental": ["low_light", "rain_snow", "fog", "tunnel_low_light"],
+    # These operators are reserved for the synthetic-unseen test partition.
+    "held_out_test": ["defocus_blur", "compression_artifact"],
 }
 
 SEVERITY_LEVELS = [0.0, 0.2, 0.4, 0.8]
@@ -31,9 +33,86 @@ class VideoLoadError(Exception):
     """Raised when a video file cannot be loaded or has too few frames."""
 
 
+class SpatialAnnotationError(ValueError):
+    """Raised when a spatially targeted operator lacks track/region metadata."""
+
+
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class TrackBox:
+    """A normalized bounding box attached to one source-video frame."""
+
+    frame_index: int
+    bbox: Tuple[float, float, float, float]
+
+    def __post_init__(self) -> None:
+        x1, y1, x2, y2 = self.bbox
+        if self.frame_index < 0:
+            raise ValueError("frame_index must be non-negative")
+        if not (0.0 <= x1 < x2 <= 1.0 and 0.0 <= y1 < y2 <= 1.0):
+            raise ValueError(
+                "Track boxes must use normalized [x1, y1, x2, y2] coordinates"
+            )
+
+
+@dataclass
+class ObjectTrack:
+    """An object trajectory used by targeted occlusion and blur operators."""
+
+    track_id: str
+    category: str
+    boxes: List[TrackBox]
+    event_relevant: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.track_id.strip() or not self.category.strip():
+            raise ValueError("track_id and category must not be empty")
+        if not self.boxes:
+            raise ValueError("an object track must contain at least one box")
+        ordered = sorted(self.boxes, key=lambda item: item.frame_index)
+        if len({item.frame_index for item in ordered}) != len(ordered):
+            raise ValueError("an object track cannot repeat a frame_index")
+        self.boxes = ordered
+
+    def box_at(self, frame_index: int) -> Optional[Tuple[float, float, float, float]]:
+        """Linearly interpolate a box only while the track is visible."""
+        if frame_index < self.boxes[0].frame_index or frame_index > self.boxes[-1].frame_index:
+            return None
+        for left, right in zip(self.boxes, self.boxes[1:]):
+            if frame_index == left.frame_index:
+                return left.bbox
+            if left.frame_index < frame_index < right.frame_index:
+                span = right.frame_index - left.frame_index
+                alpha = (frame_index - left.frame_index) / span
+                return tuple(
+                    float(a + alpha * (b - a))
+                    for a, b in zip(left.bbox, right.bbox)
+                )
+        return self.boxes[-1].bbox
+
+
+@dataclass
+class InteractionRegion:
+    """A tracked region containing the interaction that defines the event."""
+
+    region_id: str
+    boxes: List[TrackBox]
+
+    def __post_init__(self) -> None:
+        if not self.region_id.strip() or not self.boxes:
+            raise ValueError("an interaction region needs an id and boxes")
+        ordered = sorted(self.boxes, key=lambda item: item.frame_index)
+        if len({item.frame_index for item in ordered}) != len(ordered):
+            raise ValueError("an interaction region cannot repeat a frame_index")
+        self.boxes = ordered
+
+    def box_at(self, frame_index: int) -> Optional[Tuple[float, float, float, float]]:
+        proxy = ObjectTrack(self.region_id, "interaction", self.boxes)
+        return proxy.box_at(frame_index)
+
 
 @dataclass
 class DegradationProfile:
@@ -41,8 +120,13 @@ class DegradationProfile:
     factors: List[Tuple[str, float]] = field(default_factory=list)
     # Each element: (factor_name, severity)  severity in SEVERITY_LEVELS
     difficulty_level: float = 0.0  # one of {0.0, 0.2, 0.4, 0.8}
+    domain: str = ""
 
     def __post_init__(self) -> None:
+        if not self.domain:
+            self.domain = "synthetic_seen" if self.factors else "clean"
+        if self.domain not in {"clean", "synthetic_seen", "synthetic_unseen"}:
+            raise ValueError(f"Unsupported generated degradation domain: {self.domain}")
         if self.difficulty_level not in SEVERITY_LEVELS:
             raise ValueError(
                 f"difficulty_level must be one of {SEVERITY_LEVELS}, "
@@ -52,6 +136,8 @@ class DegradationProfile:
             raise ValueError("A non-zero degradation level requires factors")
         if self.factors and self.difficulty_level == 0.0:
             raise ValueError("The clean profile cannot contain degradation factors")
+        if bool(self.factors) != self.domain.startswith("synthetic_"):
+            raise ValueError("profile factors and generated domain are inconsistent")
         for factor_name, severity in self.factors:
             if factor_name not in VALID_FACTOR_NAMES:
                 raise ValueError(f"Unsupported degradation factor: {factor_name}")
@@ -83,6 +169,8 @@ class VideoClip:
     event_type: str = ""
     event_aliases: List[str] = field(default_factory=list)
     degradation_profiles: List[DegradationProfile] = field(default_factory=list)
+    object_tracks: List[ObjectTrack] = field(default_factory=list)
+    interaction_regions: List[InteractionRegion] = field(default_factory=list)
     fps: float = 30.0
     duration_sec: float = 0.0
 
@@ -108,6 +196,7 @@ class DegradedClip:
     end_sec: float
     profile: DegradationProfile
     source_clip: Optional[VideoClip] = None
+    synthesis_metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -134,6 +223,8 @@ class StructuredSample:
     conclusion_annotation: str
     answer_annotation: str
     split: str  # "sft_train" | "rl_train" | "val" | "test"
+    synthesis_metadata: dict = field(default_factory=dict)
+    degradation_domain: str = "synthetic_seen"
 
     def __post_init__(self) -> None:
         if self.difficulty_level not in SEVERITY_LEVELS:

@@ -19,6 +19,8 @@ REQUIRED_FIELDS = {
     "degradation_level",
     "degradation_domain",
     "degradation_combination",
+    "synthesis_applied",
+    "degradation_protocol",
     "gt_interval",
     "event_type",
     "event_aliases",
@@ -117,6 +119,17 @@ def main() -> None:
             if record["degradation_domain"] not in VALID_DOMAINS:
                 errors.append(
                     f"line {line_number}: invalid degradation_domain"
+                )
+            synthetic = record["degradation_domain"].startswith("synthetic_")
+            if bool(record["synthesis_applied"]) != synthetic:
+                errors.append(
+                    f"line {line_number}: synthesis_applied must match the domain"
+                )
+            if record["degradation_domain"] == "natural" and str(
+                record["degradation_protocol"]
+            ) != "source_observation":
+                errors.append(
+                    f"line {line_number}: natural records cannot name a synthesis protocol"
                 )
             if not str(record["event_type"]).strip():
                 errors.append(f"line {line_number}: empty event_type")
