@@ -36,3 +36,24 @@ def test_sampled_kl_is_non_negative():
     current = torch.tensor([-1.0, -2.0])
     reference = torch.tensor([-1.5, -1.5])
     assert torch.all(sampled_reverse_kl(current, reference) >= 0.0)
+
+
+def test_sampled_kl_remains_finite_for_extreme_log_ratios():
+    current = torch.tensor([-1000.0, 1000.0], requires_grad=True)
+    reference = torch.tensor([1000.0, -1000.0])
+    kl = sampled_reverse_kl(current, reference)
+    assert torch.all(torch.isfinite(kl))
+    kl.mean().backward()
+    assert torch.all(torch.isfinite(current.grad))
+
+
+@pytest.mark.parametrize(
+    "clip_eps,kl_coef",
+    [(0.0, 0.1), (1.0, 0.1), (0.2, -0.1)],
+)
+def test_invalid_grpo_hyperparameters_are_rejected(clip_eps, kl_coef):
+    values = torch.tensor([-1.0])
+    with pytest.raises(ValueError):
+        clipped_grpo_loss(
+            values, values, values, torch.tensor(1.0), clip_eps, kl_coef
+        )

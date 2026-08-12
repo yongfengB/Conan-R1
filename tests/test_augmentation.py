@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from dataset.augmentation import synthesize_degradation
+from dataset.augmentation import OPERATOR_ORDER, synthesize_degradation
 from dataset.degradation_protocol import (
     load_degradation_protocol,
     sample_degradation_profile,
@@ -101,6 +101,7 @@ def test_persistent_weather_changes_smoothly_but_is_not_static():
 
 def test_protocol_defines_and_samples_k_distribution():
     protocol = load_degradation_protocol()
+    assert OPERATOR_ORDER == protocol["operator_order"]
     rng = np.random.default_rng(42)
     counts = {1: 0, 2: 0, 3: 0}
     for _ in range(4000):
@@ -119,3 +120,32 @@ def test_unseen_profile_contains_a_held_out_operator():
     )
     names = {name for name, _ in profile.factors}
     assert names & set(protocol["synthetic_unseen_test_operators"])
+
+
+def test_declared_unseen_combinations_are_not_training_reachable():
+    protocol = load_degradation_protocol()
+    categories = protocol["seen_training_operators"]
+    category_by_operator = {
+        operator: category
+        for category, operators in categories.items()
+        for operator in operators
+    }
+    for combination in protocol["synthetic_unseen_test_combinations"]:
+        represented = [category_by_operator[name] for name in combination]
+        assert len(set(represented)) < len(represented)
+
+
+def test_synthesis_metadata_records_exact_operator_contract():
+    frames = [np.full((32, 32, 3), 128, dtype=np.uint8) for _ in range(3)]
+    profile = DegradationProfile(
+        [("sensor_noise", 0.4), ("motion_blur", 0.4)], 0.4
+    )
+    result = synthesize_degradation(_clip(frames), profile, seed=5)
+    metadata = result.synthesis_metadata
+    assert metadata["synthesis_applied"] is True
+    assert metadata["operator_order"] == ["motion_blur", "sensor_noise"]
+    assert [item["severity_fraction"] for item in metadata["active_operators"]] == [
+        0.4,
+        0.4,
+    ]
+    assert all(item["maximum_magnitude"] for item in metadata["active_operators"])

@@ -15,7 +15,8 @@ combination_distribution:
   one_per_seen_category: 0.10
 severity_assignment: all_active_operators_use_profile_level
 operator_order:
-  - local_occlusion
+  - vehicle_mask
+  - interaction_area_mask
   - motion_blur
   - defocus_blur
   - low_light
@@ -34,9 +35,12 @@ seen_training_operators:
 # These two operators and all combinations containing them are test-only.
 synthetic_unseen_test_operators: [defocus_blur, compression_artifact]
 synthetic_unseen_test_combinations:
-  - [vehicle_mask, rain_snow]
-  - [interaction_area_mask, lens_flare]
-  - [motion_blur, fog, sensor_noise]
+  - [vehicle_mask, interaction_area_mask]
+  - [motion_blur, lens_flare]
+  - [rain_snow, fog, tunnel_low_light]
+synthetic_unseen_mode_distribution:
+  held_out_operator: 0.50
+  held_out_combination: 0.50
 natural_test_rule: source_observation_only
 
 operators:

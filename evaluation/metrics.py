@@ -9,6 +9,11 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 from training.rewards import compute_rt, normalize_event_label
 
 
+def _unit_interval(value: float) -> float:
+    """Remove harmless floating-point excursions from normalized metrics."""
+    return float(max(0.0, min(1.0, value)))
+
+
 def compute_corpus_bleu(
     hypotheses: Sequence[str], references: Sequence[str], max_order: int
 ) -> float:
@@ -25,7 +30,9 @@ def compute_corpus_bleu(
         effective_order=True,
         max_ngram_order=max_order,
     )
-    return float(metric.corpus_score(list(hypotheses), [list(references)]).score / 100.0)
+    return _unit_interval(
+        metric.corpus_score(list(hypotheses), [list(references)]).score / 100.0
+    )
 
 
 def compute_bleu(hyp: str, ref: str, n: int = 1) -> float:
@@ -41,7 +48,7 @@ def compute_meteor(hyp: str, ref: str) -> float:
     if not hyp_tokens or not ref_tokens:
         return 0.0
     try:
-        return float(meteor_score([ref_tokens], hyp_tokens))
+        return _unit_interval(meteor_score([ref_tokens], hyp_tokens))
     except LookupError as error:
         raise RuntimeError(
             "METEOR requires NLTK wordnet and omw-1.4 resources."
@@ -52,7 +59,7 @@ def compute_rouge_l(hyp: str, ref: str) -> float:
     from rouge_score import rouge_scorer
 
     scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=False)
-    return float(scorer.score(ref, hyp)["rougeL"].fmeasure)
+    return _unit_interval(scorer.score(ref, hyp)["rougeL"].fmeasure)
 
 
 def compute_tiou(
@@ -64,16 +71,30 @@ def compute_tiou(
 
 
 def compute_event_metrics(
-    predictions: Sequence[Optional[str]], references: Sequence[str]
+    predictions: Sequence[Optional[str]],
+    references: Sequence[str],
+    aliases: Optional[Sequence[Sequence[str]]] = None,
 ) -> Dict[str, float]:
     if len(predictions) != len(references):
         raise ValueError("Event predictions and references must align.")
     if not references:
         return {"Event-Accuracy": 0.0, "Event-Macro-F1": 0.0}
-    predicted = [
-        normalize_event_label(value or "") for value in predictions
-    ]
     gold = [normalize_event_label(value) for value in references]
+    alias_rows = aliases or [() for _ in references]
+    if len(alias_rows) != len(references):
+        raise ValueError("Event aliases and references must align.")
+    predicted = []
+    for value, canonical, accepted_aliases in zip(
+        predictions, gold, alias_rows
+    ):
+        normalized = normalize_event_label(value or "")
+        accepted = {
+            normalize_event_label(alias) for alias in accepted_aliases
+        }
+        accepted.discard("")
+        # Manifest-declared aliases are deterministically mapped back to the
+        # canonical category before accuracy and macro-F1 are computed.
+        predicted.append(canonical if normalized in accepted else normalized)
     accuracy = sum(p == g for p, g in zip(predicted, gold)) / len(gold)
     labels = sorted(set(gold))
     per_label_f1 = []

@@ -5,10 +5,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import random
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+from dataset.splitting import stratified_partition
 
 
 def file_sha256(path: Path) -> str:
@@ -17,44 +22,6 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def stratified_partition(
-    source_records: Dict[str, List[dict]],
-    fractions: Tuple[float, ...],
-    names: Tuple[str, ...],
-    seed: int,
-) -> Dict[str, str]:
-    """Partition sources within ``(source_dataset, event_type)`` strata."""
-    if len(fractions) != len(names) or abs(sum(fractions) - 1.0) > 1e-8:
-        raise ValueError("Partition fractions and names are inconsistent.")
-    strata = defaultdict(list)
-    for source_id, records in source_records.items():
-        first = records[0]
-        key = (
-            str(first.get("source_dataset", "unspecified")),
-            str(first["event_type"]),
-        )
-        strata[key].append(source_id)
-
-    assignment: Dict[str, str] = {}
-    rng = random.Random(seed)
-    for key in sorted(strata):
-        sources = sorted(strata[key])
-        rng.shuffle(sources)
-        cumulative = 0
-        boundaries = []
-        for fraction in fractions[:-1]:
-            cumulative += round(len(sources) * fraction)
-            boundaries.append(min(cumulative, len(sources)))
-        start = 0
-        for name, end in zip(names[:-1], boundaries):
-            for source_id in sources[start:end]:
-                assignment[source_id] = name
-            start = end
-        for source_id in sources[start:]:
-            assignment[source_id] = names[-1]
-    return assignment
 
 
 def main() -> None:
@@ -104,6 +71,18 @@ def main() -> None:
         )
         for source_id, split in outer.items()
     }
+    invalid_held_out = [
+        record["video_id"]
+        for record in records
+        if record.get("degradation_domain") in {"synthetic_unseen", "natural"}
+        and source_split[record["source_video_id"]] != "test"
+    ]
+    if invalid_held_out:
+        raise ValueError(
+            "Held-out-domain variants exist for non-test sources; construct "
+            "synthetic-unseen/natural variants only after the source split. "
+            f"Invalid instances: {len(invalid_held_out)}."
+        )
     instance_split = {
         record["video_id"]: source_split[record["source_video_id"]]
         for record in records

@@ -25,6 +25,15 @@ def test_event_metrics():
     assert 0.0 <= result["Event-Macro-F1"] <= 1.0
 
 
+def test_event_metrics_honor_only_manifest_declared_aliases():
+    result = compute_event_metrics(
+        ["rear end crash", "rear end crash"],
+        ["rear-end collision", "vehicle fire"],
+        [["rear end crash"], []],
+    )
+    assert result["Event-Accuracy"] == pytest.approx(0.5)
+
+
 def test_tiou_recalls():
     result = compute_tiou_recalls([0.2, 0.5, 0.8])
     assert result["Recall@tIoU=0.5"] == pytest.approx(2 / 3)
@@ -105,9 +114,47 @@ def test_coverage_requires_natural_and_unseen_domains():
         for level, domain in (
             (0.0, "clean"),
             (0.2, "synthetic_seen"),
-            (0.4, "synthetic_unseen"),
-            (0.8, "natural"),
+            (0.4, "synthetic_seen"),
+            (0.8, "synthetic_seen"),
+            (0.8, "synthetic_unseen"),
+            (0.0, "natural"),
         )
     ]
     counts = validate_robustness_coverage(rows)
     assert counts["domain:natural"] == 1
+
+
+def test_severity_curve_excludes_natural_and_synthetic_unseen_rows():
+    rows = []
+    for level, score in ((0.0, 1.0), (0.2, 0.8), (0.4, 0.6), (0.8, 0.4)):
+        rows.append(
+            {
+                "source_video_id": "paired",
+                "degradation_level": level,
+                "degradation_domain": "clean" if level == 0.0 else "synthetic_seen",
+                "degradation_combination": "none" if level == 0.0 else "fog",
+                "predicted_answer": "collision",
+                "ground_truth_answer": "collision",
+                "METEOR": score,
+                "ROUGE-L": score,
+                "tIoU": score,
+            }
+        )
+    rows.extend(
+        [
+            {
+                **rows[0],
+                "degradation_domain": "natural",
+                "METEOR": 0.0,
+            },
+            {
+                **rows[-1],
+                "degradation_domain": "synthetic_unseen",
+                "METEOR": 0.0,
+            },
+        ]
+    )
+    report = summarize_robustness(rows, metrics=("METEOR",))
+    assert report["synthetic_seen_severity"]["0.0"]["METEOR"] == 1.0
+    assert report["synthetic_seen_severity"]["0.8"]["METEOR"] == 0.4
+    assert report["domains"]["natural"]["METEOR"] == 0.0

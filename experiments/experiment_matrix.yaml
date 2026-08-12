@@ -1,70 +1,56 @@
-schema_version: 1
+schema_version: 2
+paper_revision: 2026-08-12
 seed: 42
-single_run_protocol: true
+artifact_scope: executable_core_method_and_demo_audit
 
 core_training:
-  - name: sft30
-    command: "torchrun --standalone --nproc_per_node=4 scripts/train_sft.py --config configs/sft_config.yaml"
-    checkpoint: "checkpoints/sft30"
-  - name: conan_r1
-    command: "torchrun --standalone --nproc_per_node=4 scripts/train_grpo.py --config configs/grpo_config.yaml"
-    checkpoint: "checkpoints/grpo_full"
+  - name: conan_r1_stage1
+    base_config: configs/sft_config.yaml
+    split: sft_train
+    source_fraction: 0.30
+    epochs: 10
+    command: torchrun --standalone --nproc_per_node=4 scripts/train_sft.py --config configs/sft_config.yaml
+  - name: conan_r1_stage2
+    base_config: configs/grpo_config.yaml
+    split: rl_train
+    source_fraction: 0.70
+    epochs: 5
+    command: torchrun --standalone --nproc_per_node=4 scripts/train_grpo.py --config configs/grpo_config.yaml
 
-grpo_ablations:
-  base_config: "configs/grpo_config.yaml"
+runnable_sft_controls:
+  - name: structured_sft
+    definition: five_block_lora_sft_without_motion_or_reliability_modules
+    config: configs/structured_sft_config.yaml
+    command: torchrun --standalone --nproc_per_node=4 scripts/train_sft.py --config configs/structured_sft_config.yaml
+  - name: without_type_influence
+    definition: full_stage1_pathway_without_type_or_influence_output_blocks
+    config: configs/no_type_influence_sft_config.yaml
+    command: torchrun --standalone --nproc_per_node=4 scripts/train_sft.py --config configs/no_type_influence_sft_config.yaml
+
+stage2_reward:
+  shared_initialization: checkpoints/sft30
   variants:
-    # Progressive controls reported in the component-ablation table.
-    - name: rd_only
-      overrides: {reward.w_d: 1.0, reward.w_e: 0.0, reward.w_t: 0.0, reward.w_l: 0.0}
-    - name: rd_rl_only
-      overrides: {reward.w_d: 0.5, reward.w_e: 0.0, reward.w_t: 0.0, reward.w_l: 0.5}
-    # Full-minus-one diagnostic variants.
-    - name: without_rd
-      overrides: {reward.w_d: 0.0, reward.w_e: 0.3333333333, reward.w_t: 0.3333333333, reward.w_l: 0.3333333334}
-    - name: without_re
-      overrides: {reward.w_d: 0.3333333333, reward.w_e: 0.0, reward.w_t: 0.3333333333, reward.w_l: 0.3333333334}
-    - name: without_rt
-      overrides: {reward.w_d: 0.3333333333, reward.w_e: 0.3333333333, reward.w_t: 0.0, reward.w_l: 0.3333333334}
-    - name: without_rl
-      overrides: {reward.w_d: 0.3333333333, reward.w_e: 0.3333333333, reward.w_t: 0.3333333334, reward.w_l: 0.0}
-    - name: fixed_length_rl
-      overrides: {reward.fixed_reasoning_target_length: 64}
+    - {name: without_rd, overrides: {reward.w_d: 0.0, reward.w_e: 0.3333333333, reward.w_t: 0.3333333333, reward.w_l: 0.3333333334}}
+    - {name: without_re, overrides: {reward.w_d: 0.3333333333, reward.w_e: 0.0, reward.w_t: 0.3333333333, reward.w_l: 0.3333333334}}
+    - {name: without_rt, overrides: {reward.w_d: 0.3333333333, reward.w_e: 0.3333333333, reward.w_t: 0.0, reward.w_l: 0.3333333334}}
+    - {name: without_rl, overrides: {reward.w_d: 0.3333333333, reward.w_e: 0.3333333333, reward.w_t: 0.3333333334, reward.w_l: 0.0}}
+    - {name: fixed_length_70, overrides: {reward.fixed_reasoning_target_length: 70}}
+    - {name: conan_r1, overrides: {}}
 
-structural_ablation:
-  name: without_type_influence
-  sft_config: "configs/no_type_influence_sft_config.yaml"
-  grpo_base_config: "configs/grpo_config.yaml"
-  overrides:
-    model.sft_checkpoint: "checkpoints/sft30_no_type_influence"
-    reward.w_d: 0.0
-    reward.w_e: 0.40
-    reward.w_t: 0.40
-    reward.w_l: 0.20
-    ablation.allow_missing_type_influence: true
+reliability_field_interventions:
+  command: python scripts/evaluate_interventions.py --checkpoint checkpoints/grpo_full --data_dir data/surv_vau --split test --output results/reliability_interventions.json
+  fixed_checkpoint: true
+  fixed_video_input: true
+  conditions: [predicted, all_one, spatial_shuffle, temporal_shuffle, branch_swap]
 
-degradation_profile_interventions:
-  command: "python scripts/evaluate_interventions.py --checkpoint checkpoints/grpo_full --data_dir data/surv_vau --split test --output results/interventions.json"
-  conditions:
-    - original
-    - event_evidence_masked
-    - temporal_order_shuffled
-    - type_permuted
-    - reasoning_removed
-    - rationale_only_no_video
-  interpretation: "behavioral sensitivity analysis, not formal causal identification"
+robustness:
+  synthetic_seen_severity: [0.0, 0.2, 0.4, 0.8]
+  synthetic_unseen: separate_test_partition
+  natural: separate_source_observation_partition
+  reporting_rule: never_merge_synthetic_and_natural_robustness
 
 evaluation:
-  split: test
-  degradation_levels: [0.0, 0.2, 0.4, 0.8]
-  degradation_domains: [clean, synthetic_seen, synthetic_unseen, natural]
-  metrics:
-    - BLEU-1
-    - BLEU-4
-    - METEOR
-    - ROUGE-L
-    - tIoU
-    - Recall@tIoU=0.3
-    - Recall@tIoU=0.5
-    - Recall@tIoU=0.7
-    - Event-Accuracy
-    - Event-Macro-F1
+  metrics: [BLEU-1, BLEU-4, METEOR, ROUGE-L, tIoU, Event-Accuracy, Event-Macro-F1]
+  requires_raw_predictions: true
+  requires_checkpoint_sha256: true
+  requires_split_manifest_sha256: true

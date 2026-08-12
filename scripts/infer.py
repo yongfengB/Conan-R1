@@ -50,12 +50,13 @@ def main() -> None:
     try:
         from dataset.video_utils import (
             probe_video,
-            sample_frames,
-            uniform_sample_timestamps,
+            sample_anchor_motion_frames,
         )
-        from dataset.dataset import STRUCTURED_OUTPUT_INSTRUCTION
+        from dataset.dataset import structured_output_instruction
         from dataset.types import VideoLoadError
         from model.conan_r1 import ConanR1Model, LoRAConfig
+        from scripts._common import load_config, load_core_protocol
+        from scripts.train_sft import build_reliability_config
         from model.parser import parse_structured_output, extract_temporal_interval
         from scripts._common import resolve_device
     except ImportError as e:
@@ -65,30 +66,49 @@ def main() -> None:
     # Load frames
     try:
         fps, frame_count, duration_sec = probe_video(str(video_path))
-        frames = sample_frames(str(video_path), n=25, size=(224, 224))
+        frames, motion_frames, motion_pairs = sample_anchor_motion_frames(
+            str(video_path), n=25, size=(224, 224)
+        )
     except VideoLoadError as e:
         print(f"ERROR: Cannot read video — {e}", file=sys.stderr)
         sys.exit(1)
 
     # Load model
     logger.info("Loading model from checkpoint: %s", args.checkpoint)
+    raw_config = load_config("configs/grpo_config.yaml")
+    core_protocol = load_core_protocol(Path(args.checkpoint))
     model = ConanR1Model(
-        lora_config=LoRAConfig(), device=resolve_device(args.device)
+        lora_config=LoRAConfig(),
+        base_model=raw_config["model"]["base_model"],
+        base_model_revision=raw_config["model"].get("base_model_revision"),
+        device=resolve_device(args.device),
+        reliability_config=build_reliability_config(
+            raw_config, raw_config["model"]["base_model"]
+        ),
+        motion_v_max=float(core_protocol["motion_v_max"]),
+        degradation_factor_names=load_config(raw_config["model"]["method_config"])[
+            "degradation_factors"
+        ],
     )
-    model.load_lora(args.checkpoint, is_trainable=False)
+    model.load_core(args.checkpoint, is_trainable=False)
 
     # Generate
     logger.info("Generating structured output...")
-    timestamps = uniform_sample_timestamps(frame_count, fps, 25)
+    timestamps = [first / fps for first, _ in motion_pairs]
     temporal_prompt = (
         f"{args.prompt}\nVideo duration: {duration_sec:.3f} seconds. The 25 "
         "frames are uniformly sampled at seconds ["
         + ", ".join(f"{value:.3f}" for value in timestamps)
         + "]. Report temporal boundaries in seconds using interval: "
-        f"[start_sec, end_sec]. {STRUCTURED_OUTPUT_INSTRUCTION}"
+        f"[start_sec, end_sec]. {structured_output_instruction()}"
     )
     raw_output = model.generate(
-        frames, temporal_prompt, max_new_tokens=args.max_new_tokens
+        frames,
+        temporal_prompt,
+        max_new_tokens=args.max_new_tokens,
+        motion_frames=motion_frames,
+        elapsed_seconds=[(second - first) / fps for first, second in motion_pairs],
+        timestamps=timestamps,
     )
 
     # Parse
@@ -110,6 +130,7 @@ def main() -> None:
                 "num_source_frames": frame_count,
                 "duration_sec": duration_sec,
                 "sampled_timestamps_sec": timestamps,
+                "native_motion_pairs": motion_pairs,
                 "frame_size": [224, 224],
             },
         }

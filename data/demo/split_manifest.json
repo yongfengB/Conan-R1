@@ -1,7 +1,7 @@
 {
-  "annotations_sha256": "b5280bc62a66e386233017762007d516dbf2a6fa6cd07b9fa224336072735e97",
+  "annotations_sha256": "37ca3cddd707fae1e855cc5a2e3450e436b11e3e2e2469ff681cc11350e0e3a7",
   "artifact_role": "executable_schema_parser_metric_demo_not_paper_evidence",
-  "dataset_version": "conan-r1-synthetic-demo-v1",
+  "dataset_version": "conan-r1-reliability-demo-v2",
   "inner_train_fractions": {
     "rl_train": 0.7,
     "sft_train": 0.3
@@ -18,7 +18,7 @@
     "train": 0.7,
     "val": 0.15
   },
-  "raw_predictions_sha256": "580f09d43b98b4c7bc99d09e9b5f7e8600eb643044b15803dd1acee4707eb34a",
+  "raw_predictions_sha256": "0b4c8bf96a1be9d62399dbb3242031482b43fcdd0da2b79c44adfb66ba7317da",
   "schema_version": 1,
   "seed": 42,
   "source_count": 20,

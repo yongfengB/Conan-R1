@@ -9,15 +9,16 @@ Three artifact classes are kept separate:
    degradation protocol are included.
 2. **Executable demo audit**: synthetic videos, annotations, split manifest,
    raw predictions, and exact SHA256 identities are included.
-3. **Manuscript numerical audit**: aggregate table JSON is included, while the
-   paper-scale raw predictions, checkpoint files, and full-data split manifest
-   are external to this release.
+3. **Paper-scale numerical audit**: result rows are accepted only together with
+   raw predictions, complete checkpoint identity, and the full-data split
+   manifest. No paper-scale numerical rows are included in this core release.
 
 Every new training or evaluation run must record:
 
 - `git rev-parse HEAD` for the code revision;
 - `annotations.jsonl`, `splits.json`, and `split_manifest.json` SHA256 values;
-- LoRA checkpoint filename and SHA256;
+- every inference-defining checkpoint component SHA256 plus a canonical
+  checkpoint identity;
 - resolved YAML and its SHA256;
 - Python, PyTorch, CUDA, GPU, command, seed, and decoding settings;
 - raw output, parse status, event label, interval, and per-sample metrics.
@@ -27,10 +28,6 @@ The command-line runners implement this contract through
 its aggregate JSON can be traced to the corresponding raw outputs and all
 three code/data/checkpoint identities.
 
-The manuscript parity command
-
-```bash
-python scripts/check_manuscript_sync.py ../../sections/06_experiments.tex
-```
-
-checks transcription parity, not empirical provenance.
+The evaluator and result collector operate only on raw outputs. A copied table
+value without the required code, data, and checkpoint identities is not a
+release artifact.

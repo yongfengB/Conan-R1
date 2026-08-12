@@ -18,18 +18,21 @@ from tqdm import tqdm
 
 from model.conan_r1 import ConanR1Model
 from model.parser import (
+    extract_degradation_profile,
     extract_event_type,
     extract_temporal_interval,
     parse_structured_output,
 )
 from .grpo_math import clipped_grpo_loss, normalize_group_advantages
+from .auxiliary import encode_degradation_profile, rasterize_logged_occlusions
+from .stage_objectives import AuxiliaryLossWeights, stage2_loss
+from .precision import make_grad_scaler, require_finite
 from .rewards import (
-    canonicalize_factor,
     compute_rd,
     compute_re,
     compute_rl,
     compute_rt,
-    compute_total_reward,
+    compute_task_masked_reward,
     validate_reward_weights,
 )
 
@@ -68,13 +71,26 @@ class GRPOConfig:
     fixed_reasoning_target_length: Optional[int] = None
     # Structural ablation
     allow_missing_type_influence: bool = False
+    policy_scope: str = "full"
+    preserve_during_grpo: bool = True
+    lambda_d_rl: float = 1.0
+    lambda_q_rl: float = 1.0
+    lambda_c_rl: float = 0.1
 
     @classmethod
     def from_yaml(cls, path: str) -> "GRPOConfig":
         with open(path, encoding="utf-8") as handle:
             config = yaml.safe_load(handle)
         instance = cls()
-        for section in ("training", "reward", "data", "output", "ablation"):
+        for section in (
+            "training",
+            "reward",
+            "data",
+            "output",
+            "ablation",
+            "auxiliary_losses",
+            "model",
+        ):
             for key, value in config.get(section, {}).items():
                 if hasattr(instance, key):
                     setattr(instance, key, value)
@@ -90,6 +106,24 @@ class GRPOConfig:
             raise ValueError("group_size must be at least 2.")
         if instance.update_epochs < 1:
             raise ValueError("update_epochs must be at least 1.")
+        if instance.policy_scope not in {"full", "lora_only"}:
+            raise ValueError("policy_scope must be full or lora_only.")
+        if instance.lr <= 0.0 or instance.epochs < 1:
+            raise ValueError("GRPO lr and epochs must be positive.")
+        if not 0.0 < instance.clip_eps < 1.0 or instance.kl_coef < 0.0:
+            raise ValueError("clip_eps must be in (0, 1) and kl_coef non-negative.")
+        if instance.temperature <= 0.0 or not 0.0 < instance.top_p <= 1.0:
+            raise ValueError("temperature and top_p must define valid sampling.")
+        if instance.max_grad_norm <= 0.0:
+            raise ValueError("max_grad_norm must be positive.")
+        if instance.logging_steps < 1 or instance.save_steps < 1:
+            raise ValueError("logging_steps and save_steps must be positive.")
+        if min(instance.lambda_d_rl, instance.lambda_q_rl, instance.lambda_c_rl) < 0.0:
+            raise ValueError("Auxiliary loss weights must be non-negative.")
+        if instance.allow_missing_type_influence and instance.lambda_c_rl > 0.0:
+            raise ValueError(
+                "lambda_c_rl must be zero when TYPE or INFLUENCE may be absent."
+            )
         return instance
 
 
@@ -101,6 +135,9 @@ class RewardBreakdown:
     rl: float
     total: float
     parse_success: float
+    event_active: float = 1.0
+    temporal_active: float = 1.0
+    active_fields_valid: float = 1.0
 
 
 @dataclass
@@ -143,14 +180,23 @@ class GRPOTrainer:
         self.model.enable_gradient_checkpointing()
         self.model.disable_dropout()
         self.ref_model.disable_dropout()
-        for parameter in self.ref_model.model.parameters():
-            parameter.requires_grad = False
-        self.ref_model.model.eval()
+        for module in (
+            self.ref_model.model,
+            self.ref_model.reliability_pathway,
+            self.ref_model.consistency_readouts,
+            self.ref_model.motion_teacher,
+        ):
+            if module is None:
+                continue
+            for parameter in module.parameters():
+                parameter.requires_grad_(False)
+            module.eval()
 
         trainable = [
             parameter
-            for parameter in self.model.model.parameters()
-            if parameter.requires_grad
+            for _, parameter in self.model.trainable_policy_named_parameters(
+                self.config.policy_scope
+            )
         ]
         if not trainable:
             raise RuntimeError("GRPO policy has no trainable parameters.")
@@ -159,10 +205,13 @@ class GRPOTrainer:
             lr=self.config.lr,
             weight_decay=self.config.weight_decay,
         )
+        self.scaler = make_grad_scaler(self.model.device, self.model.dtype)
         self.optimizer_step = 0
         self.rollout_step = 0
 
-    def sample_group(self, frames: List, prompt: str) -> List[str]:
+    def sample_group(
+        self, frames: List, prompt: str, visual_context: dict
+    ) -> List[str]:
         return [
             self.model.generate(
                 frames,
@@ -171,24 +220,10 @@ class GRPOTrainer:
                 do_sample=True,
                 temperature=self.config.temperature,
                 top_p=self.config.top_p,
+                **visual_context,
             )
             for _ in range(self.config.group_size)
         ]
-
-    @staticmethod
-    def _parse_profile(type_block: str) -> List:
-        profile = []
-        for entry in re_split_profile(type_block):
-            if ":" not in entry:
-                continue
-            name, severity_text = entry.split(":", 1)
-            try:
-                profile.append(
-                    (canonicalize_factor(name), float(severity_text.strip()))
-                )
-            except ValueError:
-                continue
-        return profile
 
     def _reward_breakdown(self, response: str, sample: dict) -> RewardBreakdown:
         optional_blocks = (
@@ -202,7 +237,16 @@ class GRPOTrainer:
         if parsed is None:
             return RewardBreakdown(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
-        predicted_profile = self._parse_profile(parsed.type_block)
+        predicted_profile = (
+            []
+            if self.config.allow_missing_type_influence and not parsed.type_block
+            else extract_degradation_profile(parsed.type_block)
+        )
+        if predicted_profile is None:
+            return RewardBreakdown(
+                0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+                active_fields_valid=0.0,
+            )
         ground_truth_profile = [
             (factor, severity)
             for factor, severity in sample.get("degradation_profile", [])
@@ -215,6 +259,8 @@ class GRPOTrainer:
             lambda_fn=self.config.lambda_fn,
         )
 
+        event_active = bool(sample.get("task_mask", {}).get("event", True))
+        temporal_active = bool(sample.get("task_mask", {}).get("temporal", True))
         predicted_event = extract_event_type(parsed.answer_block)
         event_aliases = sample.get("event_aliases", [])
         re_score = compute_re(
@@ -239,23 +285,42 @@ class GRPOTrainer:
             target_length,
             tolerance=self.config.length_tolerance,
         )
-        total = compute_total_reward(
+        active_fields_valid = (
+            (not event_active or predicted_event is not None)
+            and (not temporal_active or predicted_interval is not None)
+        )
+        total = compute_task_masked_reward(
             rd,
             re_score,
             rt,
             rl,
+            event_active=event_active,
+            temporal_active=temporal_active,
+            active_fields_valid=active_fields_valid,
             w_d=self.config.w_d,
             w_e=self.config.w_e,
             w_t=self.config.w_t,
             w_l=self.config.w_l,
         )
-        return RewardBreakdown(rd, re_score, rt, rl, total, 1.0)
+        if not active_fields_valid:
+            rd = re_score = rt = rl = 0.0
+        return RewardBreakdown(
+            rd,
+            re_score,
+            rt,
+            rl,
+            total,
+            1.0,
+            float(event_active),
+            float(temporal_active),
+            float(active_fields_valid),
+        )
 
     def _collect_rollout(
-        self, frames: List, prompt: str, sample: dict
+        self, frames: List, prompt: str, sample: dict, visual_context: dict
     ) -> List[CandidateRollout]:
         """Sample responses and freeze their old/reference probabilities."""
-        responses = self.sample_group(frames, prompt)
+        responses = self.sample_group(frames, prompt, visual_context)
         reward_breakdowns = [
             self._reward_breakdown(response, sample) for response in responses
         ]
@@ -271,10 +336,10 @@ class GRPOTrainer:
             responses, advantages, reward_breakdowns
         ):
             old_log_probs = self.model.response_token_log_probs(
-                frames, prompt, response, require_grad=False
+                frames, prompt, response, require_grad=False, **visual_context
             ).detach()
             reference_log_probs = self.ref_model.response_token_log_probs(
-                frames, prompt, response, require_grad=False
+                frames, prompt, response, require_grad=False, **visual_context
             ).detach()
             if old_log_probs.numel() == 0:
                 continue
@@ -296,7 +361,12 @@ class GRPOTrainer:
         return candidates
 
     def _optimize_rollout(
-        self, frames: List, prompt: str, candidates: List[CandidateRollout]
+        self,
+        frames: List,
+        prompt: str,
+        candidates: List[CandidateRollout],
+        visual_context: dict,
+        sample: dict,
     ) -> Dict[str, float]:
         diagnostic_rows = []
         losses = []
@@ -304,11 +374,17 @@ class GRPOTrainer:
             self.optimizer.zero_grad(set_to_none=True)
             update_losses = []
             for candidate in candidates:
-                current_log_probs = self.model.response_token_log_probs(
+                current_log_probs, degraded_state = self.model.response_token_log_probs_with_state(
                     frames,
                     prompt,
                     candidate.response,
                     require_grad=True,
+                    require_diagnostic_slots=(
+                        self.config.preserve_during_grpo
+                        and self.config.policy_scope == "full"
+                        and self.config.lambda_c_rl > 0.0
+                    ),
+                    **visual_context,
                 )
                 loss, diagnostics = clipped_grpo_loss(
                     current_log_probs=current_log_probs,
@@ -318,14 +394,68 @@ class GRPOTrainer:
                     clip_eps=self.config.clip_eps,
                     kl_coef=self.config.kl_coef,
                 )
-                (loss / len(candidates)).backward()
+                if self.config.preserve_during_grpo and self.config.policy_scope == "full":
+                    source_frames, source_context = self._source_visual_context(sample)
+                    _, source_state = self.model.response_token_log_probs_with_state(
+                        source_frames,
+                        prompt,
+                        candidate.response,
+                        require_grad=False,
+                        require_diagnostic_slots=False,
+                        **source_context,
+                    )
+                    presence, severity = encode_degradation_profile(
+                        [sample["degradation_profile"]],
+                        self.model.degradation_factor_names,
+                        device=self.model.device,
+                    )
+                    mask = rasterize_logged_occlusions(
+                        sample, degraded_state.pathway_output, self.model.device
+                    )
+                    timestamps = torch.tensor(
+                        [sample["anchor_timestamps_sec"]], device=self.model.device
+                    )
+                    deg, rel, cons = self.model.auxiliary_control_losses(
+                        degraded_state,
+                        source_state,
+                        factor_presence=presence,
+                        factor_severity=severity,
+                        occlusion_token_mask=mask,
+                        timestamps=timestamps,
+                        compute_consistency=self.config.lambda_c_rl > 0.0,
+                    )
+                    loss = stage2_loss(
+                        loss,
+                        deg,
+                        rel,
+                        cons,
+                        AuxiliaryLossWeights(
+                            self.config.lambda_d_rl,
+                            self.config.lambda_q_rl,
+                            self.config.lambda_c_rl,
+                        ),
+                    ).total
+                require_finite(loss, "GRPO loss")
+                self.scaler.scale(loss / len(candidates)).backward()
                 update_losses.append(loss.detach())
                 diagnostic_rows.append(diagnostics)
 
-            torch.nn.utils.clip_grad_norm_(
-                self.model.model.parameters(), self.config.max_grad_norm
+            self.scaler.unscale_(self.optimizer)
+            self.model.synchronize_visual_gradients()
+            gradient_norm = torch.nn.utils.clip_grad_norm_(
+                [
+                    parameter
+                    for _, parameter in self.model.trainable_policy_named_parameters(
+                        self.config.policy_scope
+                    )
+                ],
+                self.config.max_grad_norm,
             )
-            self.optimizer.step()
+            require_finite(gradient_norm, "GRPO gradient norm")
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            if self.model.motion_teacher is not None and self.config.policy_scope == "full":
+                self.model.update_motion_teacher()
             self.optimizer_step += 1
             losses.extend(update_losses)
 
@@ -343,6 +473,21 @@ class GRPOTrainer:
             "approx_kl": mean_tensor("approx_kl"),
             "policy_objective": mean_tensor("policy_objective"),
         }
+
+    @staticmethod
+    def _source_visual_context(sample: dict):
+        source = (sample["source_frames"].permute(0, 2, 3, 1).cpu().numpy() * 255).astype("uint8")
+        motion = (
+            sample["source_motion_frames"].permute(0, 2, 3, 1).cpu().numpy() * 255
+        ).astype("uint8")
+        return (
+            [source[index] for index in range(source.shape[0])],
+            {
+                "motion_frames": [motion[index] for index in range(motion.shape[0])],
+                "elapsed_seconds": sample["source_motion_elapsed_sec"],
+                "timestamps": sample["anchor_timestamps_sec"],
+            },
+        )
 
     def _log_record(self, record: Dict) -> None:
         if not is_main_process():
@@ -389,11 +534,25 @@ class GRPOTrainer:
                 frames = [
                     frame_array[index] for index in range(frame_array.shape[0])
                 ]
+                motion_tensor = sample["motion_frames"]
+                motion_array = (
+                    motion_tensor.permute(0, 2, 3, 1).cpu().numpy() * 255
+                ).astype("uint8")
+                visual_context = {
+                    "motion_frames": [
+                        motion_array[index]
+                        for index in range(motion_array.shape[0])
+                    ],
+                    "elapsed_seconds": sample["motion_elapsed_sec"],
+                    "timestamps": sample["anchor_timestamps_sec"],
+                }
                 prompt = sample["prompt"]
 
-                candidates = self._collect_rollout(frames, prompt, sample)
+                candidates = self._collect_rollout(
+                    frames, prompt, sample, visual_context
+                )
                 optimization = self._optimize_rollout(
-                    frames, prompt, candidates
+                    frames, prompt, candidates, visual_context, sample
                 )
                 self.rollout_step += 1
                 components = {
@@ -402,7 +561,17 @@ class GRPOTrainer:
                         for candidate in candidates
                     )
                     / len(candidates)
-                    for key in ("rd", "re", "rt", "rl", "total", "parse_success")
+                    for key in (
+                        "rd",
+                        "re",
+                        "rt",
+                        "rl",
+                        "total",
+                        "parse_success",
+                        "event_active",
+                        "temporal_active",
+                        "active_fields_valid",
+                    )
                 }
                 record = {
                     "epoch": epoch + 1,
@@ -445,8 +614,9 @@ class GRPOTrainer:
         if not is_main_process():
             return
         os.makedirs(path, exist_ok=True)
-        self.model.save_lora(path)
+        self.model.save_core(path)
         torch.save(self.optimizer.state_dict(), os.path.join(path, "optimizer.pt"))
+        torch.save(self.scaler.state_dict(), os.path.join(path, "scaler.pt"))
         with open(
             os.path.join(path, "trainer_state.json"), "w", encoding="utf-8"
         ) as handle:
@@ -467,13 +637,3 @@ def is_main_process() -> bool:
         or not dist.is_initialized()
         or dist.get_rank() == 0
     )
-
-
-def re_split_profile(type_block: str) -> List[str]:
-    """Split a TYPE block while tolerating commas between factor entries."""
-    normalized = type_block.replace("\n", ";")
-    return [
-        entry.strip()
-        for entry in normalized.replace(",", ";").split(";")
-        if entry.strip()
-    ]

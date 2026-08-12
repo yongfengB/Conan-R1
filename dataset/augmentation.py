@@ -22,22 +22,12 @@ from .types import (
     SpatialAnnotationError,
     VideoClip,
 )
+from .degradation_protocol import load_degradation_protocol
 
 
 BBox = Tuple[float, float, float, float]
-OPERATOR_ORDER = [
-    "vehicle_mask",
-    "interaction_area_mask",
-    "motion_blur",
-    "defocus_blur",
-    "low_light",
-    "tunnel_low_light",
-    "fog",
-    "rain_snow",
-    "lens_flare",
-    "sensor_noise",
-    "compression_artifact",
-]
+_PROTOCOL = load_degradation_protocol()
+OPERATOR_ORDER = list(_PROTOCOL["operator_order"])
 _OPERATOR_RANK = {name: index for index, name in enumerate(OPERATOR_ORDER)}
 
 
@@ -46,7 +36,8 @@ def _odd(value: int) -> int:
 
 
 def _stable_seed(clip: VideoClip, profile: DegradationProfile, seed: int) -> int:
-    factors = ";".join(f"{name}:{severity:.3f}" for name, severity in profile.factors)
+    ordered = sorted(profile.factors, key=lambda item: _OPERATOR_RANK[item[0]])
+    factors = ";".join(f"{name}:{severity:.3f}" for name, severity in ordered)
     payload = f"{seed}|{clip.source_video_id}|{clip.video_id}|{factors}".encode()
     return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big")
 
@@ -322,6 +313,21 @@ def apply_occlusion(
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
+def occlusion_target_box(bbox: BBox, severity: float) -> BBox:
+    """Return the exact normalized region covered by ``apply_occlusion``."""
+    x1, y1, x2, y2 = bbox
+    center_x, center_y = _box_center(bbox)
+    scale = math.sqrt(max(0.0, min(1.0, severity)))
+    half_width = (x2 - x1) * scale / 2.0
+    half_height = (y2 - y1) * scale / 2.0
+    return (
+        max(0.0, center_x - half_width),
+        max(0.0, center_y - half_height),
+        min(1.0, center_x + half_width),
+        min(1.0, center_y + half_height),
+    )
+
+
 @dataclass
 class _TemporalContext:
     clip: VideoClip
@@ -432,18 +438,47 @@ def synthesize_degradation(
     """
     if not clip.frames:
         raise ValueError("Cannot synthesize degradation for an empty clip")
+    first_shape = clip.frames[0].shape
+    if len(first_shape) != 3 or first_shape[2] != 3:
+        raise ValueError("Degradation synthesis requires H x W x 3 RGB frames")
+    if any(frame.shape != first_shape for frame in clip.frames):
+        raise ValueError("All source frames must have an identical shape")
     resolved_seed = _stable_seed(clip, profile, seed)
     context = _TemporalContext(clip=clip, profile=profile, seed=resolved_seed)
     degraded_frames: List[np.ndarray] = []
+    occlusion_boxes: Dict[str, List[Optional[List[float]]]] = {
+        factor: []
+        for factor, _ in profile.factors
+        if factor in {"vehicle_mask", "interaction_area_mask"}
+    }
     ordered_factors = sorted(
         profile.factors, key=lambda item: _OPERATOR_RANK[item[0]]
     )
     for frame_index, frame in enumerate(clip.frames):
         out = frame.copy()
         for factor_name, severity in ordered_factors:
+            if factor_name in occlusion_boxes:
+                box = context.occlusion_box(factor_name, frame_index)
+                occlusion_boxes[factor_name].append(
+                    list(map(float, occlusion_target_box(box, severity)))
+                    if box is not None
+                    else None
+                )
             out = _apply_factor(out, factor_name, severity, frame_index, context)
         degraded_frames.append(out)
 
+    active_operator_metadata = [
+        {
+            "name": factor,
+            "severity_fraction": float(severity),
+            "maximum_magnitude": _PROTOCOL["operators"][factor][
+                "maximum_magnitude"
+            ],
+            "temporal_model": _PROTOCOL["operators"][factor]["temporal_model"],
+        }
+        for factor, severity in ordered_factors
+    ]
+    synthesis_applied = bool(ordered_factors)
     return DegradedClip(
         video_id=clip.video_id,
         frames=degraded_frames,
@@ -452,10 +487,21 @@ def synthesize_degradation(
         profile=profile,
         source_clip=clip,
         synthesis_metadata={
-            "protocol": "surv-vau-degradation-v1",
+            "protocol": (
+                _PROTOCOL["protocol_id"] if synthesis_applied else "source_observation"
+            ),
+            "protocol_schema_version": int(_PROTOCOL["schema_version"]),
             "seed": resolved_seed,
-            "temporal_state": "video_level",
-            "spatial_targeting": "tracks_or_interaction_regions",
+            "synthesis_applied": synthesis_applied,
+            "operator_order": [name for name, _ in ordered_factors],
+            "active_operators": active_operator_metadata,
+            "temporal_state": "video_level" if synthesis_applied else "none",
+            "spatial_targeting": (
+                "tracks_or_interaction_regions"
+                if occlusion_boxes
+                else "not_applicable"
+            ),
+            "occlusion_boxes_norm_by_frame": occlusion_boxes,
         },
     )
 

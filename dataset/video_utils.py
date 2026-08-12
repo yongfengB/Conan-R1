@@ -36,6 +36,82 @@ def uniform_sample_timestamps(
     ]
 
 
+def native_motion_pairs(total_frames: int, n: int = 25, offset: int = 1):
+    """Return anchor/adjacent native-frame pairs and never jump anchor-to-anchor."""
+    if offset < 1:
+        raise ValueError("offset must be at least one native frame.")
+    if total_frames < n + offset:
+        raise VideoLoadError(
+            f"Video has {total_frames} frames but {n} anchors with offset "
+            f"{offset} require at least {n + offset}."
+        )
+    anchors = [
+        int(index * (total_frames - 1 - offset) / (n - 1))
+        for index in range(n)
+    ]
+    return [(anchor, anchor + offset) for anchor in anchors]
+
+
+def farneback_native_flow(
+    frames: List[np.ndarray],
+    n: int = 25,
+    offset: int = 1,
+) -> Tuple[List[np.ndarray], List[Tuple[int, int]]]:
+    """Reference frozen flow estimator over adjacent native-rate frame pairs.
+
+    Farnebäck has no trainable parameters and makes the release runnable
+    without redistributing a third-party neural checkpoint.  A full experiment
+    may replace it with another frozen estimator, but that estimator and its
+    checkpoint hash must be recorded in provenance.
+    """
+    pairs = native_motion_pairs(len(frames), n=n, offset=offset)
+    flows = []
+    for first_index, second_index in pairs:
+        first = cv2.cvtColor(frames[first_index], cv2.COLOR_RGB2GRAY)
+        second = cv2.cvtColor(frames[second_index], cv2.COLOR_RGB2GRAY)
+        flow = cv2.calcOpticalFlowFarneback(
+            first,
+            second,
+            None,
+            pyr_scale=0.5,
+            levels=3,
+            winsize=15,
+            iterations=3,
+            poly_n=5,
+            poly_sigma=1.2,
+            flags=0,
+        )
+        flows.append(flow.astype(np.float32))
+    return flows, pairs
+
+
+def estimate_training_velocity_scale(
+    videos: List[List[np.ndarray]],
+    fps_values: List[float],
+    *,
+    n: int = 25,
+    quantile: float = 0.99,
+) -> float:
+    """Estimate the fixed ``v_max`` from training-source native-rate flow."""
+    if len(videos) != len(fps_values) or not videos:
+        raise ValueError("videos and fps_values must be non-empty aligned lists.")
+    if not 0.5 <= quantile <= 1.0:
+        raise ValueError("quantile must lie in [0.5, 1.0].")
+    magnitudes = []
+    for frames, fps in zip(videos, fps_values):
+        if fps <= 0.0:
+            raise ValueError("fps values must be positive.")
+        flows, pairs = farneback_native_flow(frames, n=n)
+        for flow, (first_index, second_index) in zip(flows, pairs):
+            elapsed = (second_index - first_index) / float(fps)
+            velocity = flow / elapsed
+            magnitudes.append(np.linalg.norm(velocity, axis=-1).reshape(-1))
+    value = float(np.quantile(np.concatenate(magnitudes), quantile))
+    if not np.isfinite(value) or value <= 0.0:
+        raise ValueError("Training flow did not produce a positive v_max.")
+    return value
+
+
 def probe_video(path: str) -> Tuple[float, int, float]:
     """Return `(fps, frame_count, duration_sec)` from the source container."""
     capture = cv2.VideoCapture(path)
@@ -109,6 +185,26 @@ def sample_frames(
         resized = cv2.resize(frame, size, interpolation=cv2.INTER_LINEAR)
         sampled.append(resized)
     return sampled
+
+
+def sample_anchor_motion_frames(
+    video_path: str,
+    n: int = 25,
+    size: Tuple[int, int] = (224, 224),
+    offset: int = 1,
+) -> Tuple[List[np.ndarray], List[np.ndarray], List[Tuple[int, int]]]:
+    """Load anchor frames and their adjacent native-rate motion partners."""
+    frames = load_video(video_path)
+    pairs = native_motion_pairs(len(frames), n=n, offset=offset)
+    anchors = [
+        cv2.resize(frames[first], size, interpolation=cv2.INTER_LINEAR)
+        for first, _ in pairs
+    ]
+    partners = [
+        cv2.resize(frames[second], size, interpolation=cv2.INTER_LINEAR)
+        for _, second in pairs
+    ]
+    return anchors, partners, pairs
 
 
 def frames_from_array(

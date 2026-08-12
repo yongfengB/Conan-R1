@@ -21,7 +21,8 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.create_data_splits import file_sha256, stratified_partition
+from dataset.splitting import stratified_partition
+from scripts.create_data_splits import file_sha256
 
 
 def canonical_json(value: object) -> bytes:
@@ -46,8 +47,10 @@ def record(
         else "none"
     )
     answer = f"event_type: rear-end collision; interval: [{start:.3f}, {end:.3f}]"
+    anchor_indices = list(range(25))
+    motion_pairs = [[index, index + 1] for index in anchor_indices]
     return {
-        "schema_version": "surv-vau-annotation-v1",
+        "schema_version": "surv-vau-annotation-v2",
         "video_id": video_id,
         "source_video_id": source_id,
         "source_dataset": "synthetic_demo",
@@ -61,13 +64,29 @@ def record(
         "gt_interval": [start, end],
         "event_type": "rear-end collision",
         "event_aliases": ["rear end crash"],
+        "task_mask": {"event": True, "temporal": True},
+        "source_video_file": f"videos/{source_id}__clean.mp4",
+        "anchor_indices": anchor_indices,
+        "motion_pair_indices": motion_pairs,
+        "motion_elapsed_sec": [1.0 / 6.0] * 25,
+        "influence_targets": {
+            "affected_interval": [0.0, 4.0],
+            "evidence_branch": "both",
+            "reliability_level": max(0.0, 1.0 - level),
+            "cue_impact": "reduces contour and motion-cue clarity" if level else "no synthetic evidence loss",
+        },
+        "occlusion_token_mask": None,
         "reasoning_target_length": int(round(32 + 96 * level)),
         "reasoning_target_source": "deterministic_policy",
-        "duration_sec": 4.0,
+        "duration_sec": 26.0 / 6.0,
         "fps": 6.0,
-        "num_source_frames": 25,
+        "num_source_frames": 26,
         "type_annotation": type_annotation,
-        "influence_annotation": "The observation condition changes cue reliability.",
+        "influence_annotation": (
+            f"affected_interval: [0.000, {26.0 / 6.0:.3f}]; evidence_branch: both; "
+            f"reliability_level: {max(0.0, 1.0 - level):.1f}; "
+            f"cue_impact: {'reduces contour and motion-cue clarity' if level else 'no synthetic evidence loss'}"
+        ),
         "reasoning_annotation": "The following vehicle closes the gap before contact.",
         "conclusion_annotation": "A rear-end collision occurs.",
         "answer_annotation": answer,
@@ -77,7 +96,7 @@ def record(
 
 def base_frames(source_index: int, natural_source: bool = False) -> List[np.ndarray]:
     frames: List[np.ndarray] = []
-    for frame_index in range(25):
+    for frame_index in range(26):
         background = 18 if natural_source else 52
         frame = np.full((64, 64, 3), background, dtype=np.uint8)
         cv2.line(frame, (0, 48), (63, 48), (180, 180, 180), 2)
@@ -212,7 +231,7 @@ def build(output: Path, seed: int) -> Dict[str, object]:
 
     manifest = {
         "schema_version": 1,
-        "dataset_version": "conan-r1-synthetic-demo-v1",
+        "dataset_version": "conan-r1-reliability-demo-v2",
         "artifact_role": "executable_schema_parser_metric_demo_not_paper_evidence",
         "split_rule_id": "source-stratified-70-15-15_then-train-30-70-v1",
         "seed": seed,

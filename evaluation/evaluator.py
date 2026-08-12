@@ -36,7 +36,7 @@ class Evaluator:
             raise ValueError("Predictions and references must have equal length.")
 
         answers, gt_answers, multi_references = [], [], []
-        event_predictions, event_references = [], []
+        event_predictions, event_references, event_aliases = [], [], []
         tiou_scores, meteor_scores, rouge_scores = [], [], []
         details = []
 
@@ -45,6 +45,11 @@ class Evaluator:
             answer = parsed.answer_block if parsed is not None else ""
             predicted_interval = extract_temporal_interval(answer)
             predicted_event = extract_event_type(answer)
+            task_mask = reference.get(
+                "task_mask", {"event": True, "temporal": True}
+            )
+            event_active = bool(task_mask.get("event", True))
+            temporal_active = bool(task_mask.get("temporal", True))
             gt_answer = reference.get("answer_annotation", "")
             gt_interval = tuple(reference["gt_interval"])
             tiou = compute_tiou(
@@ -60,9 +65,12 @@ class Evaluator:
             multi_references.append(
                 reference.get("answer_references", [gt_answer])
             )
-            event_predictions.append(predicted_event)
-            event_references.append(reference["event_type"])
-            tiou_scores.append(tiou)
+            if event_active:
+                event_predictions.append(predicted_event)
+                event_references.append(reference["event_type"])
+                event_aliases.append(reference.get("event_aliases", []))
+            if temporal_active:
+                tiou_scores.append(tiou)
             meteor_scores.append(meteor)
             rouge_scores.append(rouge_l)
             details.append(
@@ -76,7 +84,7 @@ class Evaluator:
                     "ground_truth_event_type": reference["event_type"],
                     "predicted_interval": predicted_interval,
                     "ground_truth_interval": list(gt_interval),
-                    "tIoU": tiou,
+                    "tIoU": tiou if temporal_active else None,
                     "METEOR": meteor,
                     "ROUGE-L": rouge_l,
                     "degradation_level": float(
@@ -94,6 +102,8 @@ class Evaluator:
                     "degradation_protocol": reference.get(
                         "degradation_protocol", "source_observation"
                     ),
+                    "event_active": event_active,
+                    "temporal_active": temporal_active,
                 }
             )
 
@@ -112,7 +122,9 @@ class Evaluator:
         }
         results.update(compute_tiou_recalls(tiou_scores))
         results.update(
-            compute_event_metrics(event_predictions, event_references)
+            compute_event_metrics(
+                event_predictions, event_references, event_aliases
+            )
         )
         if include_wts_metrics:
             results["CIDEr"] = compute_cider(answers, multi_references)

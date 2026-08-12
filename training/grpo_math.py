@@ -26,8 +26,10 @@ def sampled_reverse_kl(
     current_log_probs: torch.Tensor, reference_log_probs: torch.Tensor
 ) -> torch.Tensor:
     """Non-negative per-token KL estimator used by GRPO implementations."""
-    log_ratio = reference_log_probs.detach() - current_log_probs
-    return torch.exp(log_ratio) - log_ratio - 1.0
+    log_ratio = (
+        reference_log_probs.detach().float() - current_log_probs.float()
+    ).clamp(min=-20.0, max=20.0)
+    return torch.expm1(log_ratio) - log_ratio
 
 
 def clipped_grpo_loss(
@@ -47,6 +49,10 @@ def clipped_grpo_loss(
         raise ValueError("Current, old and reference log-prob tensors must align.")
     if current_log_probs.numel() == 0:
         raise ValueError("Cannot optimize an empty response.")
+    if not 0.0 < clip_eps < 1.0:
+        raise ValueError("clip_eps must be in (0, 1).")
+    if kl_coef < 0.0:
+        raise ValueError("kl_coef must be non-negative.")
 
     log_ratio = torch.clamp(
         current_log_probs - old_log_probs.detach(), min=-20.0, max=20.0

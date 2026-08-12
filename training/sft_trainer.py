@@ -17,6 +17,13 @@ from transformers import get_linear_schedule_with_warmup
 from tqdm import tqdm
 
 from model.conan_r1 import ConanR1Model
+from model.reliability_pathway import ReliabilityPathwayOutput
+from training.auxiliary import (
+    encode_degradation_profile,
+    rasterize_logged_occlusions,
+)
+from training.stage_objectives import AuxiliaryLossWeights, stage1_loss
+from training.precision import make_grad_scaler, require_finite
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +56,10 @@ class SFTConfig:
             "ANSWER",
         ]
     )
+    lambda_d: float = 1.0
+    lambda_q_sft: float = 1.0
+    lambda_c_sft: float = 0.1
+    policy_scope: str = "full"
 
     @classmethod
     def from_yaml(cls, path: str) -> "SFTConfig":
@@ -62,16 +73,51 @@ class SFTConfig:
         for k, v in cfg.get("data", {}).items():
             if hasattr(obj, k):
                 setattr(obj, k, v)
+        for section in ("auxiliary_losses", "model"):
+            for k, v in cfg.get(section, {}).items():
+                if hasattr(obj, k):
+                    setattr(obj, k, v)
         out_cfg = cfg.get("output", {})
         if "checkpoint_dir" in out_cfg:
             obj.checkpoint_dir = out_cfg["checkpoint_dir"]
+        if obj.lr <= 0.0 or obj.epochs < 1:
+            raise ValueError("SFT lr and epochs must be positive.")
+        if obj.batch_size != 1:
+            raise ValueError("The public Qwen adapter requires batch_size: 1.")
+        if obj.gradient_accumulation_steps < 1:
+            raise ValueError("gradient_accumulation_steps must be positive.")
+        if obj.max_grad_norm <= 0.0:
+            raise ValueError("max_grad_norm must be positive.")
+        if obj.logging_steps < 1 or obj.save_steps < 1:
+            raise ValueError("logging_steps and save_steps must be positive.")
+        if min(obj.lambda_d, obj.lambda_q_sft, obj.lambda_c_sft) < 0.0:
+            raise ValueError("Auxiliary loss weights must be non-negative.")
+        if obj.policy_scope not in {"full", "lora_only"}:
+            raise ValueError("policy_scope must be full or lora_only.")
+        if obj.policy_scope == "lora_only" and any(
+            value > 0.0 for value in (obj.lambda_d, obj.lambda_q_sft, obj.lambda_c_sft)
+        ):
+            raise ValueError("LoRA-only SFT cannot enable reliability auxiliary losses.")
+        enabled = {str(block).upper() for block in obj.enabled_blocks}
+        canonical = [
+            block
+            for block in ("TYPE", "INFLUENCE", "REASONING", "CONCLUSION", "ANSWER")
+            if block in enabled
+        ]
+        if [str(block).upper() for block in obj.enabled_blocks] != canonical:
+            raise ValueError("enabled_blocks must be a canonical ordered subset.")
+        if obj.lambda_c_sft > 0.0 and not {"TYPE", "INFLUENCE"}.issubset(enabled):
+            raise ValueError(
+                "lambda_c_sft must be zero when TYPE or INFLUENCE is ablated."
+            )
         return obj
 
 
 class SFTTrainer:
     """Trains ConanR1Model with cross-entropy loss on structured sequences.
 
-    Only LoRA adapter parameters are updated; backbone weights are frozen.
+    The language backbone and appearance encoder remain frozen.  LoRA and the
+    response-changing reliability pathway are optimized when attached.
     """
 
     def __init__(
@@ -85,21 +131,27 @@ class SFTTrainer:
         self.config = config or SFTConfig()
         self.model.enable_gradient_checkpointing()
 
-        # Freeze backbone, only train LoRA params
+        # Freeze the base backbone. LoRA remains trainable through PEFT.
         for name, param in self.model.model.named_parameters():
             if "lora_" not in name:
                 param.requires_grad = False
 
-        trainable = sum(p.numel() for p in self.model.model.parameters() if p.requires_grad)
-        total = sum(p.numel() for p in self.model.model.parameters())
-        logger.info("Trainable params: %d / %d (%.2f%%)", trainable, total, 100 * trainable / total)
+        named_trainable = list(
+            self.model.trainable_policy_named_parameters(self.config.policy_scope)
+        )
+        trainable = sum(p.numel() for _, p in named_trainable)
+        total = sum(p.numel() for p in self.model.model.parameters()) + sum(
+            p.numel() for _, p in named_trainable if not _.startswith("lora.")
+        )
+        logger.info("Trainable policy params: %d / %d (%.2f%%)", trainable, total, 100 * trainable / total)
 
         self.optimizer = AdamW(
-            [p for p in self.model.model.parameters() if p.requires_grad],
+            [parameter for _, parameter in named_trainable],
             lr=self.config.lr,
             weight_decay=self.config.weight_decay,
         )
         self.scheduler = None
+        self.scaler = make_grad_scaler(self.model.device, self.model.dtype)
         self.global_step = 0
 
     def _log_record(self, record: dict) -> None:
@@ -138,10 +190,88 @@ class SFTTrainer:
             frames_tensor = sample["frames"]  # (T, C, H, W)
             frames_np = (frames_tensor.permute(0, 2, 3, 1).cpu().numpy() * 255).astype("uint8")
             frames_list = [frames_np[t] for t in range(frames_np.shape[0])]
+            motion_tensor = sample["motion_frames"]
+            motion_np = (
+                motion_tensor.permute(0, 2, 3, 1).cpu().numpy() * 255
+            ).astype("uint8")
+            motion_list = [motion_np[t] for t in range(motion_np.shape[0])]
 
             target = self._build_target_sequence(sample)
+            if self.config.policy_scope == "lora_only":
+                losses.append(
+                    self.model.response_nll(
+                        frames_list,
+                        sample["prompt"],
+                        target,
+                    )
+                )
+                continue
+            use_consistency = self.config.lambda_c_sft > 0.0
+            lm_loss, degraded_state = self.model.response_nll_with_state(
+                    frames_list,
+                    sample["prompt"],
+                    target,
+                    require_diagnostic_slots=use_consistency,
+                    motion_frames=motion_list,
+                    elapsed_seconds=sample["motion_elapsed_sec"],
+                    timestamps=sample["anchor_timestamps_sec"],
+                )
+            source_tensor = sample["source_frames"]
+            source_np = (
+                source_tensor.permute(0, 2, 3, 1).cpu().numpy() * 255
+            ).astype("uint8")
+            source_frames = [source_np[t] for t in range(source_np.shape[0])]
+            source_motion_tensor = sample["source_motion_frames"]
+            source_motion_np = (
+                source_motion_tensor.permute(0, 2, 3, 1).cpu().numpy() * 255
+            ).astype("uint8")
+            source_motion = [
+                source_motion_np[t] for t in range(source_motion_np.shape[0])
+            ]
+            # The source branch supplies frozen targets only.  Keeping this
+            # forward outside the autograd graph avoids an unintended second
+            # language-model graph and makes the teacher semantics explicit.
+            with torch.no_grad():
+                _, source_state = self.model.response_nll_with_state(
+                    source_frames,
+                    sample["prompt"],
+                    target,
+                    require_diagnostic_slots=False,
+                    motion_frames=source_motion,
+                    elapsed_seconds=sample["source_motion_elapsed_sec"],
+                    timestamps=sample["anchor_timestamps_sec"],
+                )
+            factor_names = self.model.degradation_factor_names
+            presence, severity = encode_degradation_profile(
+                [sample["degradation_profile"]], factor_names, device=self.model.device
+            )
+            mask = rasterize_logged_occlusions(
+                sample, degraded_state.pathway_output, self.model.device
+            )
+            timestamps = torch.tensor(
+                [sample["anchor_timestamps_sec"]], device=self.model.device
+            )
+            deg, rel, cons = self.model.auxiliary_control_losses(
+                degraded_state,
+                source_state,
+                factor_presence=presence,
+                factor_severity=severity,
+                occlusion_token_mask=mask,
+                timestamps=timestamps,
+                compute_consistency=use_consistency,
+            )
             losses.append(
-                self.model.response_nll(frames_list, sample["prompt"], target)
+                stage1_loss(
+                    lm_loss,
+                    deg,
+                    rel,
+                    cons,
+                    AuxiliaryLossWeights(
+                        self.config.lambda_d,
+                        self.config.lambda_q_sft,
+                        self.config.lambda_c_sft,
+                    ),
+                ).total
             )
 
         return torch.stack(losses).mean()
@@ -187,7 +317,15 @@ class SFTTrainer:
                 tqdm(loader, desc=f"SFT Epoch {epoch + 1}/{self.config.epochs}")
             ):
                 loss = self._compute_loss(batch)
-                (loss / self.config.gradient_accumulation_steps).backward()
+                require_finite(loss, "SFT loss")
+                window_start = (
+                    batch_idx // self.config.gradient_accumulation_steps
+                ) * self.config.gradient_accumulation_steps
+                window_size = min(
+                    self.config.gradient_accumulation_steps,
+                    len(loader) - window_start,
+                )
+                self.scaler.scale(loss / window_size).backward()
                 epoch_loss += loss.item()
 
                 should_update = (
@@ -197,10 +335,22 @@ class SFTTrainer:
                 if not should_update:
                     continue
 
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.model.parameters(), self.config.max_grad_norm
+                self.scaler.unscale_(self.optimizer)
+                self.model.synchronize_visual_gradients()
+                gradient_norm = torch.nn.utils.clip_grad_norm_(
+                    [
+                        parameter
+                        for _, parameter in self.model.trainable_policy_named_parameters(
+                            self.config.policy_scope
+                        )
+                    ],
+                    self.config.max_grad_norm,
                 )
-                self.optimizer.step()
+                require_finite(gradient_norm, "SFT gradient norm")
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+                if self.model.motion_teacher is not None:
+                    self.model.update_motion_teacher()
                 self.scheduler.step()
                 self.optimizer.zero_grad(set_to_none=True)
                 global_step += 1
@@ -238,10 +388,14 @@ class SFTTrainer:
         if dist.is_available() and dist.is_initialized() and dist.get_rank() != 0:
             return
         os.makedirs(path, exist_ok=True)
-        self.model.save_lora(path)
+        if self.config.policy_scope == "full":
+            self.model.save_core(path)
+        else:
+            self.model.save_lora(path)
         torch.save(
             self.optimizer.state_dict(), os.path.join(path, "optimizer.pt")
         )
+        torch.save(self.scaler.state_dict(), os.path.join(path, "scaler.pt"))
         if self.scheduler is not None:
             torch.save(
                 self.scheduler.state_dict(), os.path.join(path, "scheduler.pt")

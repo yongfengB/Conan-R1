@@ -31,7 +31,7 @@
     "synthetic_seen": 9,
     "synthetic_unseen": 3
   },
-  "annotations_sha256": "b5280bc62a66e386233017762007d516dbf2a6fa6cd07b9fa224336072735e97",
+  "annotations_sha256": "37ca3cddd707fae1e855cc5a2e3450e436b11e3e2e2469ff681cc11350e0e3a7",
   "splits_sha256": "b097b305c682b8584a891c312d7b5eec0aa298d00600efc6d4963769ab4680c7",
   "videos_checked": true,
   "robustness_coverage_required": true

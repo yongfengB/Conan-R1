@@ -8,6 +8,7 @@ from training.rewards import (
     compute_ro,
     compute_rt,
     compute_total_reward,
+    compute_task_masked_reward,
     effective_length,
     validate_reward_weights,
 )
@@ -75,3 +76,36 @@ def test_total_reward_and_weight_validation():
         validate_reward_weights(
             {"w_d": 0.4, "w_e": 0.4, "w_t": 0.4, "w_l": 0.0}
         )
+
+
+def test_task_masked_reward_renormalizes_active_weights():
+    score = compute_task_masked_reward(
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        event_active=False,
+        temporal_active=False,
+    )
+    assert score == pytest.approx(1.0)
+    score = compute_task_masked_reward(
+        1.0,
+        1.0,
+        0.0,
+        1.0,
+        event_active=True,
+        temporal_active=False,
+    )
+    assert score == pytest.approx(1.0)
+
+
+def test_malformed_active_field_zeroes_all_active_rewards():
+    assert compute_task_masked_reward(
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        event_active=True,
+        temporal_active=True,
+        active_fields_valid=False,
+    ) == 0.0

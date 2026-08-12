@@ -24,23 +24,23 @@ def materialize(
     matrix_path: Path, output_dir: Path, overwrite: bool = False
 ) -> Dict[str, str]:
     matrix = yaml.safe_load(matrix_path.read_text(encoding="utf-8"))
-    block = matrix["grpo_ablations"]
-    base_path = Path(block["base_config"])
+    block = matrix["stage2_reward"]
+    base_path = Path("configs/grpo_config.yaml")
+    if "base_config" in block:
+        base_path = Path(block["base_config"])
     base = yaml.safe_load(base_path.read_text(encoding="utf-8"))
     output_dir.mkdir(parents=True, exist_ok=True)
+    expected_names = {f"{variant['name']}.yaml" for variant in block["variants"]}
+    if overwrite:
+        for stale in output_dir.glob("*.yaml"):
+            if stale.name not in expected_names:
+                stale.unlink()
     hashes = {}
 
     variants = list(block["variants"])
-    structural = matrix["structural_ablation"]
-    variants.append(
-        {
-            "name": structural["name"],
-            "overrides": structural["overrides"],
-        }
-    )
     for variant in variants:
         resolved = copy.deepcopy(base)
-        for dotted_key, value in variant["overrides"].items():
+        for dotted_key, value in variant.get("overrides", {}).items():
             deep_set(resolved, dotted_key, value)
         resolved.setdefault("output", {})["checkpoint_dir"] = (
             f"checkpoints/grpo_{variant['name']}"

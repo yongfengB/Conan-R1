@@ -35,33 +35,27 @@ def main() -> None:
         data_root / "annotations.jsonl",
         data_root / "splits.json",
         data_root / "split_manifest.json",
+        data_root / "motion_scale.json",
         data_root / "videos",
     ]
     missing = [str(path) for path in required_data if not path.exists()]
 
     commands = [item["command"] for item in matrix["core_training"]]
     if args.include_ablations:
+        commands.extend(
+            item["command"] for item in matrix["runnable_sft_controls"]
+        )
         materialize(
             matrix_path,
             Path("configs/generated"),
             overwrite=True,
         )
-        commands.append(
-            "torchrun --standalone --nproc_per_node=4 "
-            "scripts/train_sft.py --config "
-            + matrix["structural_ablation"]["sft_config"]
-        )
-        for variant in matrix["grpo_ablations"]["variants"]:
+        for variant in matrix["stage2_reward"]["variants"]:
             commands.append(
                 "torchrun --standalone --nproc_per_node=4 "
                 f"scripts/train_grpo.py --config configs/generated/{variant['name']}.yaml"
             )
-        commands.append(
-            "torchrun --standalone --nproc_per_node=4 "
-            "scripts/train_grpo.py --config "
-            "configs/generated/without_type_influence.yaml"
-        )
-        commands.append(matrix["degradation_profile_interventions"]["command"])
+        commands.append(matrix["reliability_field_interventions"]["command"])
 
     report = {
         "single_run_protocol": True,

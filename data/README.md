@@ -7,12 +7,15 @@ data/surv_vau/
 ├── annotations.jsonl
 ├── splits.json
 ├── split_manifest.json
+├── motion_scale.json
 └── videos/<video_id>.mp4
 ```
 
 Every record includes the event/interval annotation, structured text fields,
-source identity, degradation profile, severity, domain, combination,
-`synthesis_applied`, and `degradation_protocol`.
+source identity and source-file pairing, degradation profile, severity, domain,
+task mask, 25 anchor indices, native adjacent-frame pairs, elapsed seconds,
+influence targets, logged occlusion masks, `synthesis_applied`, and the
+degradation protocol.
 
 The exact JSON field contract is `data/annotation.schema.json`. The committed
 `data/demo/` directory is synthetic, redistributable, and executable; it is not
@@ -80,6 +83,7 @@ authority; third-party footage may need to be obtained from its original
 provider.
 
 A granted data release must include the matching `annotations.jsonl`,
-`splits.json`, and `split_manifest.json`. The code refuses training or
-evaluation when their hashes disagree. Large checkpoints are not bundled here;
-they can be rebuilt with the frozen YAML files and commands in the root README.
+`splits.json`, `split_manifest.json`, paired source videos, and training-split
+`motion_scale.json`. The code refuses reliability training when the source pair
+or fixed motion scale is absent. Large checkpoints are not bundled here; they
+can be rebuilt with the frozen YAML files and commands in the root README.

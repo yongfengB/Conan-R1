@@ -1,6 +1,7 @@
 """Unit tests for the structured output parser."""
 import pytest
 from model.parser import (
+    extract_degradation_profile,
     extract_event_type,
     extract_temporal_interval,
     parse_structured_output,
@@ -71,6 +72,13 @@ class TestParseStructuredOutput:
     def test_empty_string_returns_none(self):
         assert parse_structured_output("") is None
 
+    def test_empty_required_block_returns_none(self):
+        assert parse_structured_output(_make_valid_output(reasoning="")) is None
+
+    def test_free_text_outside_blocks_returns_none(self):
+        assert parse_structured_output("analysis: " + _make_valid_output()) is None
+        assert parse_structured_output(_make_valid_output() + " trailing") is None
+
     def test_raw_text_preserved(self):
         text = _make_valid_output()
         result = parse_structured_output(text)
@@ -122,3 +130,25 @@ class TestExtractEventType:
 
     def test_free_form_is_not_silently_judged(self):
         assert extract_event_type("A rear-end collision occurs.") is None
+
+    def test_duplicate_event_fields_are_rejected(self):
+        assert extract_event_type(
+            "event_type: collision; event_type: collision; interval: [1, 2]"
+        ) is None
+
+
+class TestExtractDegradationProfile:
+    def test_clean_literal(self):
+        assert extract_degradation_profile("none") == []
+
+    def test_compound_profile(self):
+        assert extract_degradation_profile(
+            "motion blur:0.4; sensor_noise:0.8"
+        ) == [("motion_blur", 0.4), ("sensor_noise", 0.8)]
+
+    @pytest.mark.parametrize(
+        "value",
+        ["blur", "blur:not-a-number", "blur:1.1", "blur:nan", "none;blur:0.2"],
+    )
+    def test_malformed_profile(self, value):
+        assert extract_degradation_profile(value) is None

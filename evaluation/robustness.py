@@ -23,8 +23,8 @@ def validate_robustness_coverage(
     domain_counts = defaultdict(int)
     level_sources = defaultdict(set)
     for row in rows:
-        level_counts[float(row["degradation_level"])] += 1
         domain = str(row["degradation_domain"])
+        level = float(row["degradation_level"])
         domain_counts[domain] += 1
         synthetic = domain.startswith("synthetic_")
         if bool(row.get("synthesis_applied", False)) != synthetic:
@@ -38,7 +38,9 @@ def validate_robustness_coverage(
         source_id = str(row.get("source_video_id", ""))
         if not source_id:
             raise ValueError("Robustness rows require source_video_id.")
-        level_sources[float(row["degradation_level"])].add(source_id)
+        if (domain == "clean" and level == 0.0) or domain == "synthetic_seen":
+            level_counts[level] += 1
+            level_sources[level].add(source_id)
     missing_levels = [
         float(level) for level in required_levels if level_counts[float(level)] == 0
     ]
@@ -58,14 +60,19 @@ def validate_robustness_coverage(
             "No source_video_id is represented at every required degradation level."
         )
     return {
-        **{f"level:{key}": value for key, value in level_counts.items()},
+        **{
+            f"synthetic_seen_level:{key}": value
+            for key, value in level_counts.items()
+        },
         **{f"domain:{key}": value for key, value in domain_counts.items()},
         "paired_level_sources": len(paired_sources),
     }
 
 
 def _mean(rows: Sequence[Dict], metric: str) -> float:
-    values = [float(row[metric]) for row in rows]
+    values = [
+        float(row[metric]) for row in rows if row.get(metric) is not None
+    ]
     return float(sum(values) / len(values)) if values else 0.0
 
 
@@ -89,24 +96,27 @@ def summarize_robustness(
         "tIoU",
     ),
 ) -> Dict:
-    by_level = defaultdict(list)
+    synthetic_seen_by_level = defaultdict(list)
     by_domain = defaultdict(list)
     by_combination = defaultdict(list)
     for row in rows:
-        by_level[float(row["degradation_level"])].append(row)
-        by_domain[row["degradation_domain"]].append(row)
+        level = float(row["degradation_level"])
+        domain = str(row["degradation_domain"])
+        if (domain == "clean" and level == 0.0) or domain == "synthetic_seen":
+            synthetic_seen_by_level[level].append(row)
+        by_domain[domain].append(row)
         by_combination[row["degradation_combination"]].append(row)
 
-    levels = sorted(by_level)
-    if 0.0 not in by_level:
-        raise ValueError("Robustness analysis requires the 0% reference level.")
+    levels = sorted(synthetic_seen_by_level)
+    if 0.0 not in synthetic_seen_by_level:
+        raise ValueError("Synthetic-seen analysis requires a clean 0% reference.")
     level_source_sets = {
         level: {
             str(row.get("source_video_id", ""))
             for row in subset
             if str(row.get("source_video_id", ""))
         }
-        for level, subset in by_level.items()
+        for level, subset in synthetic_seen_by_level.items()
     }
     paired_sources = set.intersection(
         *(level_source_sets[level] for level in levels)
@@ -118,20 +128,20 @@ def summarize_robustness(
     paired_by_level = {
         level: [
             row
-            for row in by_level[level]
+            for row in synthetic_seen_by_level[level]
             if str(row.get("source_video_id", "")) in paired_sources
         ]
         for level in levels
     }
     report = {
-        "levels": {},
+        "synthetic_seen_severity": {},
         "domains": {},
         "combinations": {},
         "summary": {},
         "paired_level_source_count": len(paired_sources),
     }
     for level in levels:
-        report["levels"][str(level)] = {
+        report["synthetic_seen_severity"][str(level)] = {
             metric: _score(paired_by_level[level], metric)
             for metric in metrics
         }
@@ -145,11 +155,11 @@ def summarize_robustness(
         }
 
     for metric in metrics:
-        clean = report["levels"]["0.0"][metric]
+        clean = report["synthetic_seen_severity"]["0.0"][metric]
         metric_summary = {}
         values = []
         for level in levels:
-            score = report["levels"][str(level)][metric]
+            score = report["synthetic_seen_severity"][str(level)][metric]
             retention = score / clean if clean > 0.0 else 0.0
             metric_summary[str(level)] = {
                 "score": score,

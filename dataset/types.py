@@ -1,7 +1,7 @@
 """Common data types for Conan-R1 / Surv-VAU."""
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -125,7 +125,9 @@ class DegradationProfile:
     def __post_init__(self) -> None:
         if not self.domain:
             self.domain = "synthetic_seen" if self.factors else "clean"
-        if self.domain not in {"clean", "synthetic_seen", "synthetic_unseen"}:
+        if self.domain not in {
+            "clean", "synthetic_seen", "synthetic_unseen", "natural"
+        }:
             raise ValueError(f"Unsupported generated degradation domain: {self.domain}")
         if self.difficulty_level not in SEVERITY_LEVELS:
             raise ValueError(
@@ -138,6 +140,8 @@ class DegradationProfile:
             raise ValueError("The clean profile cannot contain degradation factors")
         if bool(self.factors) != self.domain.startswith("synthetic_"):
             raise ValueError("profile factors and generated domain are inconsistent")
+        if len({factor_name for factor_name, _ in self.factors}) != len(self.factors):
+            raise ValueError("A degradation profile cannot repeat an operator")
         for factor_name, severity in self.factors:
             if factor_name not in VALID_FACTOR_NAMES:
                 raise ValueError(f"Unsupported degradation factor: {factor_name}")
@@ -168,6 +172,10 @@ class VideoClip:
     source_dataset: str = "unspecified"
     event_type: str = ""
     event_aliases: List[str] = field(default_factory=list)
+    task_mask: Dict[str, bool] = field(
+        default_factory=lambda: {"event": True, "temporal": True}
+    )
+    influence_targets: dict = field(default_factory=dict)
     degradation_profiles: List[DegradationProfile] = field(default_factory=list)
     object_tracks: List[ObjectTrack] = field(default_factory=list)
     interaction_regions: List[InteractionRegion] = field(default_factory=list)
@@ -175,16 +183,28 @@ class VideoClip:
     duration_sec: float = 0.0
 
     def __post_init__(self) -> None:
+        if not self.frames:
+            raise ValueError("A video clip must contain at least one frame")
         if self.start_frame >= self.end_frame:
             raise ValueError(
                 f"start_frame ({self.start_frame}) must be < end_frame ({self.end_frame})"
             )
+        if self.start_frame < 0 or self.end_frame >= len(self.frames):
+            raise ValueError("Event frame bounds must lie inside the source clip")
         if not self.source_video_id:
             self.source_video_id = self.video_id
         if self.fps <= 0.0:
             raise ValueError("fps must be positive")
         if self.duration_sec <= 0.0:
             self.duration_sec = max(self.end_sec, len(self.frames) / self.fps)
+        if not (0.0 <= self.start_sec < self.end_sec <= self.duration_sec):
+            raise ValueError("Event seconds must lie inside the source duration")
+        for track in self.object_tracks:
+            if track.boxes[-1].frame_index >= len(self.frames):
+                raise ValueError("Object-track frame indices must lie inside the clip")
+        for region in self.interaction_regions:
+            if region.boxes[-1].frame_index >= len(self.frames):
+                raise ValueError("Interaction-region frame indices must lie inside the clip")
 
 
 @dataclass
@@ -223,6 +243,10 @@ class StructuredSample:
     conclusion_annotation: str
     answer_annotation: str
     split: str  # "sft_train" | "rl_train" | "val" | "test"
+    task_mask: Dict[str, bool] = field(
+        default_factory=lambda: {"event": True, "temporal": True}
+    )
+    influence_targets: dict = field(default_factory=dict)
     synthesis_metadata: dict = field(default_factory=dict)
     degradation_domain: str = "synthetic_seen"
 
@@ -239,6 +263,17 @@ class StructuredSample:
             raise ValueError("source_dataset must not be empty")
         if not self.event_type.strip():
             raise ValueError("event_type must not be empty")
+        if set(self.task_mask) != {"event", "temporal"}:
+            raise ValueError("task_mask must contain exactly event and temporal")
+        if not any(bool(value) for value in self.task_mask.values()):
+            raise ValueError("At least one answer task must be active")
+        if self.influence_targets and set(self.influence_targets) != {
+            "affected_interval",
+            "evidence_branch",
+            "reliability_level",
+            "cue_impact",
+        }:
+            raise ValueError("influence_targets has an invalid field set")
         if self.reasoning_target_length <= 0:
             raise ValueError("reasoning_target_length must be positive")
         if self.reasoning_target_source not in {

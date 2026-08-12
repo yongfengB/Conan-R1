@@ -1,8 +1,9 @@
 """Structured output parser for Conan-R1 five-block format."""
 from __future__ import annotations
 import re
+import math
 from dataclasses import dataclass
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +78,11 @@ def parse_structured_output(
                 continue
             return None
         content, start, end = match
+        # An optional block may be absent, but an explicitly emitted empty
+        # block is malformed.  Otherwise empty required fields can receive
+        # task rewards through downstream defaults.
+        if not content:
+            return None
         extracted[field_name] = content
         spans.append((start, end))
 
@@ -85,6 +91,16 @@ def parse_structured_output(
         previous_end > current_start
         for (_, previous_end), (current_start, _) in zip(spans, spans[1:])
     ):
+        return None
+
+    # Fixed serialization means that no free text, duplicated markers, or
+    # prompt-injection residue may occur outside the declared blocks.
+    cursor = 0
+    for start, end in spans:
+        if text[cursor:start].strip():
+            return None
+        cursor = end
+    if text[cursor:].strip():
         return None
 
     return StructuredOutput(
@@ -111,12 +127,51 @@ def extract_event_type(answer_text: str) -> Optional[str]:
     infer a category from arbitrary prose because doing so would introduce an
     unreported semantic judge into the reward.
     """
+    matches = []
     for pattern in _EVENT_PATTERNS:
-        match = re.search(pattern, answer_text, re.IGNORECASE)
-        if match:
-            label = match.group(1).strip()
-            return label or None
-    return None
+        matches.extend(re.finditer(pattern, answer_text, re.IGNORECASE))
+    if len(matches) != 1:
+        return None
+    label = matches[0].group(1).strip()
+    return label or None
+
+
+def extract_degradation_profile(
+    type_text: str,
+) -> Optional[List[Tuple[str, float]]]:
+    """Parse the deterministic ``<TYPE>`` profile grammar.
+
+    Clean clips use the literal ``none``.  Non-clean clips use one or more
+    ``factor_name:severity`` entries separated by semicolons or commas, with
+    finite severities in ``[0, 1]``.  Unknown factor names remain structurally
+    valid so that ``r_d`` can penalize them as false positives.
+    """
+    normalized = type_text.strip()
+    if normalized.lower() == "none":
+        return []
+    if not normalized:
+        return None
+    entries = [
+        entry.strip()
+        for entry in normalized.replace("\n", ";").replace(",", ";").split(";")
+        if entry.strip()
+    ]
+    if not entries or any(entry.lower() == "none" for entry in entries):
+        return None
+    profile: List[Tuple[str, float]] = []
+    for entry in entries:
+        if entry.count(":") != 1:
+            return None
+        name, severity_text = entry.split(":", 1)
+        factor = re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
+        try:
+            severity = float(severity_text.strip())
+        except ValueError:
+            return None
+        if not factor or not math.isfinite(severity) or not 0.0 <= severity <= 1.0:
+            return None
+        profile.append((factor, severity))
+    return profile
 
 
 # ---------------------------------------------------------------------------

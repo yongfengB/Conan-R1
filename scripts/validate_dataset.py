@@ -24,6 +24,12 @@ REQUIRED_FIELDS = {
     "gt_interval",
     "event_type",
     "event_aliases",
+    "task_mask",
+    "source_video_file",
+    "anchor_indices",
+    "motion_pair_indices",
+    "motion_elapsed_sec",
+    "influence_targets",
     "reasoning_target_length",
     "reasoning_target_source",
     "duration_sec",
@@ -125,11 +131,21 @@ def main() -> None:
                 errors.append(
                     f"line {line_number}: synthesis_applied must match the domain"
                 )
-            if record["degradation_domain"] == "natural" and str(
-                record["degradation_protocol"]
-            ) != "source_observation":
+            if record["degradation_domain"] in {"clean", "natural"} and (
+                float(record["degradation_level"]) != 0.0
+                or record["degradation_profile"]
+                or str(record["degradation_protocol"]) != "source_observation"
+            ):
                 errors.append(
-                    f"line {line_number}: natural records cannot name a synthesis protocol"
+                    f"line {line_number}: source-observation domain has synthetic fields"
+                )
+            if synthetic and (
+                float(record["degradation_level"]) == 0.0
+                or not record["degradation_profile"]
+                or str(record["degradation_protocol"]) != "surv-vau-degradation-v1"
+            ):
+                errors.append(
+                    f"line {line_number}: synthetic domain has inconsistent protocol fields"
                 )
             if not str(record["event_type"]).strip():
                 errors.append(f"line {line_number}: empty event_type")
@@ -139,6 +155,50 @@ def main() -> None:
                 )
             if not isinstance(record["event_aliases"], list):
                 errors.append(f"line {line_number}: event_aliases must be a list")
+            task_mask = record["task_mask"]
+            if (
+                not isinstance(task_mask, dict)
+                or set(task_mask) != {"event", "temporal"}
+                or not any(bool(value) for value in task_mask.values())
+            ):
+                errors.append(f"line {line_number}: invalid task_mask")
+            anchors = record["anchor_indices"]
+            motion_pairs = record["motion_pair_indices"]
+            elapsed = record["motion_elapsed_sec"]
+            if not (
+                isinstance(anchors, list)
+                and len(anchors) == 25
+                and anchors == sorted(anchors)
+                and len(set(anchors)) == 25
+            ):
+                errors.append(f"line {line_number}: invalid anchor_indices")
+            if not (
+                isinstance(motion_pairs, list)
+                and len(motion_pairs) == 25
+                and all(
+                    isinstance(pair, list)
+                    and len(pair) == 2
+                    and int(pair[0]) == int(anchor)
+                    and int(pair[1]) >= int(pair[0])
+                    for pair, anchor in zip(motion_pairs, anchors)
+                )
+            ):
+                errors.append(f"line {line_number}: invalid motion_pair_indices")
+            if not (
+                isinstance(elapsed, list)
+                and len(elapsed) == 25
+                and all(float(value) > 0.0 for value in elapsed)
+            ):
+                errors.append(f"line {line_number}: invalid motion_elapsed_sec")
+            influence = record["influence_targets"]
+            if not (
+                isinstance(influence, dict)
+                and set(influence)
+                == {"affected_interval", "evidence_branch", "reliability_level", "cue_impact"}
+                and influence["evidence_branch"] in {"appearance", "motion", "both"}
+                and 0.0 <= float(influence["reliability_level"]) <= 1.0
+            ):
+                errors.append(f"line {line_number}: invalid influence_targets")
             profile = record["degradation_profile"]
             if not isinstance(profile, list):
                 errors.append(
@@ -156,14 +216,6 @@ def main() -> None:
                             f"line {line_number}: invalid degradation factor"
                         )
                         break
-            if (
-                float(record["degradation_level"]) == 0.0
-                and record["degradation_domain"] == "clean"
-                and profile
-            ):
-                errors.append(
-                    f"line {line_number}: clean 0% record has active factors"
-                )
             if video_id not in splits:
                 errors.append(f"line {line_number}: missing split assignment")
             records.append(record)
@@ -265,7 +317,13 @@ def main() -> None:
             record["degradation_domain"] for record in test_records
         )
         test_level_counts = Counter(
-            float(record["degradation_level"]) for record in test_records
+            float(record["degradation_level"])
+            for record in test_records
+            if record["degradation_domain"] == "synthetic_seen"
+            or (
+                record["degradation_domain"] == "clean"
+                and float(record["degradation_level"]) == 0.0
+            )
         )
         missing_domains = sorted(
             VALID_DOMAINS - set(test_domain_counts)
@@ -278,9 +336,13 @@ def main() -> None:
             )
         test_level_sources = defaultdict(set)
         for record in test_records:
-            test_level_sources[float(record["degradation_level"])].add(
-                str(record["source_video_id"])
-            )
+            if record["degradation_domain"] == "synthetic_seen" or (
+                record["degradation_domain"] == "clean"
+                and float(record["degradation_level"]) == 0.0
+            ):
+                test_level_sources[float(record["degradation_level"])].add(
+                    str(record["source_video_id"])
+                )
         paired_test_sources = set.intersection(
             *(test_level_sources[level] for level in sorted(VALID_LEVELS))
         )
@@ -292,7 +354,7 @@ def main() -> None:
             record["video_id"]
             for record in records
             if record["degradation_domain"] in {"synthetic_unseen", "natural"}
-            and splits[record["video_id"]] in {"sft_train", "rl_train"}
+            and splits[record["video_id"]] != "test"
         ]
         if held_out_leakage:
             raise ValueError(

@@ -1,0 +1,62 @@
+schema_version: 2
+method_id: conan-r1-source-relative-reliability-v2
+
+appearance_encoder:
+  model: Qwen/Qwen2.5-VL-3B-Instruct
+  revision: c747f21f03e7d0792c30766310bd7d8de17eeeb3
+  frozen: true
+  anchors: 25
+  frame_size: 224
+
+motion:
+  estimator: opencv_farneback_reference
+  frozen: true
+  native_frame_offset: 1
+  elapsed_time_unit: seconds
+  representation: [velocity_x, velocity_y, velocity_magnitude]
+  normalization:
+    type: training_split_fixed_quantile
+    quantile: 0.99
+    v_max_file: data/surv_vau/motion_scale.json
+    clip: [-1.0, 1.0]
+
+reliability_pathway:
+  hidden_dim: 256
+  degradation_dim: 128
+  max_spatial_tokens: 256
+  q_min: 0.05
+  reliability_prior_scale: 1.0
+  tau_appearance: 8.0
+  tau_motion: 8.0
+  ema_decay: 0.999
+  dropout: 0.0
+  ordered_tokens: local_then_temporal_per_anchor
+  occlusion_adjustment: logged_token_grid_mask
+
+degradation_factors:
+  - vehicle_mask
+  - interaction_area_mask
+  - motion_blur
+  - lens_flare
+  - sensor_noise
+  - low_light
+  - rain_snow
+  - fog
+  - tunnel_low_light
+
+diagnostic_readouts:
+  type: [factor_presence, active_factor_severity]
+  influence: [affected_interval, evidence_branch, reliability_level]
+
+checkpoint:
+  core_state_file: conan_core.pt
+  includes:
+    - motion_encoder
+    - degradation_heads
+    - reliability_heads
+    - fusion
+    - temporal_adapter
+    - projector
+    - consistency_readouts
+    - ema_motion_teacher
+    - lora

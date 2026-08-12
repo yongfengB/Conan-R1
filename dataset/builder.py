@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -26,6 +27,7 @@ from .types import (
     VideoLoadError,
 )
 from .video_utils import frames_from_array, load_video
+from .splitting import stratified_partition
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,7 @@ class SurvVAUBuilder:
     def serialize_answer(
         event_type: str,
         interval: Tuple[float, float],
+        task_mask: Optional[Dict[str, bool]] = None,
     ) -> str:
         """Serialize the two independently annotated benchmark fields once.
 
@@ -66,10 +69,15 @@ class SurvVAUBuilder:
         start, end = map(float, interval)
         if not (0.0 <= start < end):
             raise ValueError("ANSWER interval must satisfy 0 <= start < end")
-        return (
-            f"event_type: {normalized_event}; "
-            f"interval: [{start:.3f}, {end:.3f}]"
-        )
+        active = task_mask or {"event": True, "temporal": True}
+        fields = []
+        if active.get("event", True):
+            fields.append(f"event_type: {normalized_event}")
+        if active.get("temporal", True):
+            fields.append(f"interval: [{start:.3f}, {end:.3f}]")
+        if not fields:
+            raise ValueError("At least one ANSWER field must be active")
+        return "; ".join(fields)
 
     # ------------------------------------------------------------------
     # Stage 1: collect & segment
@@ -244,6 +252,21 @@ class SurvVAUBuilder:
                     degradation_profiles = self._parse_degradation_profiles(
                         ann.get("degradation_profiles"), video_id
                     )
+                    task_mask = dict(
+                        ann.get("task_mask", {"event": True, "temporal": True})
+                    )
+                    if set(task_mask) != {"event", "temporal"} or not any(
+                        bool(value) for value in task_mask.values()
+                    ):
+                        raise ValueError(
+                            "task_mask must define event/temporal with one active task"
+                        )
+                    influence_targets = dict(ann.get("influence_targets", {}))
+                    if not influence_targets:
+                        raise ValueError(
+                            "influence_targets is required; the builder will not "
+                            "invent reliability supervision"
+                        )
                     clip = VideoClip(
                         video_id=video_id,
                         frames=frames,
@@ -260,6 +283,8 @@ class SurvVAUBuilder:
                         ),
                         event_type=event_type,
                         event_aliases=list(ann.get("event_aliases", [])),
+                        task_mask=task_mask,
+                        influence_targets=influence_targets,
                         degradation_profiles=degradation_profiles,
                         object_tracks=self._parse_object_tracks(
                             ann.get("object_tracks"), video_id
@@ -293,7 +318,7 @@ class SurvVAUBuilder:
     @staticmethod
     def _profile_suffix(profile: DegradationProfile) -> str:
         if not profile.factors:
-            return "clean"
+            return "natural" if profile.domain == "natural" else "clean"
         return "__".join(
             f"{factor}-{int(round(severity * 100)):02d}"
             for factor, severity in profile.factors
@@ -334,6 +359,8 @@ class SurvVAUBuilder:
                 gt_interval=(degraded.start_sec, degraded.end_sec),
                 event_type=degraded.source_clip.event_type,
                 event_aliases=degraded.source_clip.event_aliases,
+                task_mask=degraded.source_clip.task_mask,
+                influence_targets=degraded.source_clip.influence_targets,
                 reasoning_target_length=reasoning_target_length,
                 reasoning_target_source="deterministic_policy",
                 duration_sec=degraded.source_clip.duration_sec,
@@ -346,6 +373,7 @@ class SurvVAUBuilder:
                 answer_annotation=self.serialize_answer(
                     degraded.source_clip.event_type,
                     (degraded.start_sec, degraded.end_sec),
+                    degraded.source_clip.task_mask,
                 ),
                 split="",  # assigned later
                 synthesis_metadata=degraded.synthesis_metadata,
@@ -370,46 +398,61 @@ class SurvVAUBuilder:
         All augmented variants of the same source video go to the same split.
         Training is further divided: 30% SFT, 70% RL.
         """
-        rng = random.Random(seed if seed is not None else self.seed)
-
-        # Group by immutable source_video_id.
-        video_ids = list({s.source_video_id for s in samples})
-        rng.shuffle(video_ids)
-
-        n = len(video_ids)
-        n_train = int(n * 0.70)
-        n_val = int(n * 0.15)
-
-        train_ids = set(video_ids[:n_train])
-        val_ids = set(video_ids[n_train: n_train + n_val])
-        test_ids = set(video_ids[n_train + n_val:])
-
-        n_sft = int(len(train_ids) * 0.30)
-        train_list = list(train_ids)
-        rng.shuffle(train_list)
-        sft_ids = set(train_list[:n_sft])
-        rl_ids = set(train_list[n_sft:])
+        split_seed = seed if seed is not None else self.seed
+        by_source = defaultdict(list)
+        for sample in samples:
+            by_source[sample.source_video_id].append(
+                {
+                    "source_dataset": sample.source_dataset,
+                    "event_type": sample.event_type,
+                }
+            )
+        outer = stratified_partition(
+            by_source,
+            fractions=(0.70, 0.15, 0.15),
+            names=("train", "val", "test"),
+            seed=split_seed,
+        )
+        training = {
+            source_id: records
+            for source_id, records in by_source.items()
+            if outer[source_id] == "train"
+        }
+        inner = stratified_partition(
+            training,
+            fractions=(0.30, 0.70),
+            names=("sft_train", "rl_train"),
+            seed=split_seed + 1,
+        )
+        source_split = {
+            source_id: inner[source_id] if split == "train" else split
+            for source_id, split in outer.items()
+        }
 
         splits: Dict[str, List[StructuredSample]] = {
             "sft_train": [], "rl_train": [], "val": [], "test": []
         }
+        omitted_held_out = 0
         for s in samples:
             base_id = s.source_video_id
-            if base_id in sft_ids:
-                s.split = "sft_train"
-                splits["sft_train"].append(s)
-            elif base_id in rl_ids:
-                s.split = "rl_train"
-                splits["rl_train"].append(s)
-            elif base_id in val_ids:
-                s.split = "val"
-                splits["val"].append(s)
-            else:
-                s.split = "test"
-                splits["test"].append(s)
+            s.split = source_split[base_id]
+            splits[s.split].append(s)
+
+            if (
+                s.degradation_domain in {"synthetic_unseen", "natural"}
+                and s.split != "test"
+            ):
+                splits[s.split].pop()
+                s.split = ""
+                omitted_held_out += 1
 
         for k, v in splits.items():
             logger.info("Split '%s': %d samples", k, len(v))
+        if omitted_held_out:
+            logger.info(
+                "Excluded %d held-out-domain variants from non-test sources.",
+                omitted_held_out,
+            )
         return splits
 
     def validate_sample(self, sample: StructuredSample) -> bool:

@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from dataset.builder import SurvVAUBuilder
+from dataset.video_utils import load_video, native_motion_pairs
 from model.conan_r1 import ConanR1Model
 from scripts._common import resolve_device, seed_everything
 
@@ -30,6 +31,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_dir", default="data/surv_vau")
     parser.add_argument(
         "--annotator_model", default="Qwen/Qwen2.5-VL-3B-Instruct"
+    )
+    parser.add_argument(
+        "--annotator_revision",
+        default="c747f21f03e7d0792c30766310bd7d8de17eeeb3",
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--fps", type=float, default=25.0)
@@ -71,17 +76,38 @@ def main() -> None:
     videos_dir.mkdir(parents=True, exist_ok=True)
 
     annotator = ConanR1Model(
-        base_model=args.annotator_model, device=resolve_device(args.device)
+        base_model=args.annotator_model,
+        base_model_revision=args.annotator_revision,
+        device=resolve_device(args.device),
+        enable_lora=False,
     )
     splits = SurvVAUBuilder(annotator, seed=args.seed).build(
         args.source_dir, args.annotation_file
     )
 
     split_map = {}
+    source_files = {}
+    for source_dir in args.source_dir:
+        for source_path in Path(source_dir).glob("*.mp4"):
+            source_files.setdefault(source_path.stem, source_path)
     with open(annotations_path, "w", encoding="utf-8") as annotations:
         for split_name, samples in splits.items():
             for sample in samples:
+                pairs = native_motion_pairs(sample.num_source_frames, n=25, offset=1)
+                source_name = f"{sample.source_video_id}__source.mp4"
+                source_output = videos_dir / source_name
+                if not source_output.exists():
+                    if sample.source_video_id not in source_files:
+                        raise FileNotFoundError(
+                            f"Source pair not found for {sample.source_video_id}"
+                        )
+                    _write_video(
+                        source_output,
+                        load_video(str(source_files[sample.source_video_id])),
+                        sample.fps,
+                    )
                 record = {
+                    "schema_version": "surv-vau-annotation-v2",
                     "video_id": sample.video_id,
                     "source_video_id": sample.source_video_id,
                     "source_dataset": sample.source_dataset,
@@ -104,6 +130,15 @@ def main() -> None:
                     "gt_interval": list(sample.gt_interval),
                     "event_type": sample.event_type,
                     "event_aliases": sample.event_aliases,
+                    "task_mask": sample.task_mask,
+                    "source_video_file": f"videos/{source_name}",
+                    "anchor_indices": [first for first, _ in pairs],
+                    "motion_pair_indices": [list(pair) for pair in pairs],
+                    "motion_elapsed_sec": [
+                        (second - first) / sample.fps for first, second in pairs
+                    ],
+                    "influence_targets": sample.influence_targets,
+                    "occlusion_token_mask": None,
                     "reasoning_target_length": sample.reasoning_target_length,
                     "reasoning_target_source": sample.reasoning_target_source,
                     "duration_sec": sample.duration_sec,

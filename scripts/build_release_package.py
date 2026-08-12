@@ -40,13 +40,13 @@ CORE_SCRIPTS = {
     "_common.py",
     "build_dataset.py",
     "build_release_package.py",
-    "check_manuscript_sync.py",
     "collect_results.py",
     "create_data_splits.py",
     "create_demo_dataset.py",
     "evaluate.py",
     "evaluate_interventions.py",
     "evaluate_robustness.py",
+    "estimate_motion_scale.py",
     "infer.py",
     "materialize_experiments.py",
     "run_experiment_suite.py",
@@ -57,10 +57,9 @@ CORE_SCRIPTS = {
 }
 CORE_RESULTS = {
     "README.md",
-    "artifact_inventory.json",
     "demo_dataset_validation.json",
+    "demo_evaluation.json",
     "demo_raw_predictions.jsonl",
-    "paper_results.json",
 }
 
 
@@ -98,7 +97,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--output",
-        default="../Conan-R1-core-reference-2026-08-11.zip",
+        default="../Conan-R1-core-reference-2026-08-12.zip",
     )
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
@@ -130,7 +129,7 @@ def main() -> None:
         for relative, payload in sorted(archive_entries):
             info = zipfile.ZipInfo(
                 filename=f"Conan-R1/{relative}",
-                date_time=(2026, 8, 11, 0, 0, 0),
+                date_time=(2026, 8, 12, 0, 0, 0),
             )
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = (0o755 if relative.startswith("scripts/") else 0o644) << 16

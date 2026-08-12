@@ -11,7 +11,13 @@ from dataset.types import (
     SEVERITY_LEVELS,
 )
 from dataset.builder import SurvVAUBuilder
-from dataset.video_utils import uniform_sample_indices, uniform_sample_timestamps
+from dataset.dataset import structured_output_instruction
+from dataset.splitting import stratified_partition
+from dataset.video_utils import (
+    native_motion_pairs,
+    uniform_sample_indices,
+    uniform_sample_timestamps,
+)
 from evaluation.metrics import compute_tiou
 from model.parser import extract_temporal_interval, parse_structured_output
 
@@ -70,7 +76,9 @@ class TestDegradationProfile:
 class TestVideoClip:
     def test_valid_clip(self):
         clip = VideoClip(
-            video_id="v1", frames=[], start_frame=0, end_frame=10,
+            video_id="v1",
+            frames=[np.zeros((4, 4, 3), dtype=np.uint8) for _ in range(11)],
+            start_frame=0, end_frame=10,
             start_sec=0.0, end_sec=5.0
         )
         assert clip.video_id == "v1"
@@ -78,7 +86,9 @@ class TestVideoClip:
     def test_invalid_frame_order_raises(self):
         with pytest.raises(ValueError):
             VideoClip(
-                video_id="v1", frames=[], start_frame=10, end_frame=5,
+                video_id="v1",
+                frames=[np.zeros((4, 4, 3), dtype=np.uint8) for _ in range(11)],
+                start_frame=10, end_frame=5,
                 start_sec=0.0, end_sec=5.0
             )
 
@@ -88,6 +98,42 @@ def test_exact_frame_to_second_mapping():
     assert uniform_sample_timestamps(49, fps=24.0, n=5) == pytest.approx(
         [0.0, 0.5, 1.0, 1.5, 2.0]
     )
+
+
+def test_native_motion_pairs_are_adjacent_and_do_not_clip_last_pair():
+    pairs = native_motion_pairs(49, n=5, offset=1)
+    assert pairs[0] == (0, 1)
+    assert pairs[-1] == (47, 48)
+    assert all(second - first == 1 for first, second in pairs)
+
+
+def test_structural_ablation_prompt_omits_removed_blocks():
+    instruction = structured_output_instruction(
+        ("REASONING", "CONCLUSION", "ANSWER")
+    )
+    assert "<TYPE>" not in instruction
+    assert "<INFLUENCE>" not in instruction
+    assert "<REASONING>" in instruction
+
+
+def test_structural_ablation_prompt_rejects_reordered_blocks():
+    with pytest.raises(ValueError):
+        structured_output_instruction(("ANSWER", "REASONING"))
+
+
+def test_stratified_partition_hits_global_counts_with_singleton_strata():
+    sources = {
+        f"source-{index}": [
+            {"source_dataset": f"dataset-{index}", "event_type": "event"}
+        ]
+        for index in range(20)
+    }
+    assignment = stratified_partition(
+        sources, (0.70, 0.15, 0.15), ("train", "val", "test"), seed=42
+    )
+    assert list(assignment.values()).count("train") == 14
+    assert list(assignment.values()).count("val") == 3
+    assert list(assignment.values()).count("test") == 3
 
 
 class TestStructuredSample:
@@ -162,6 +208,12 @@ class TestSurvVAUBuilderValidation:
                 ],
                 "source_001",
             )
+
+    def test_natural_profile_has_a_distinct_output_suffix(self):
+        natural = DegradationProfile(
+            factors=[], difficulty_level=0.0, domain="natural"
+        )
+        assert self.builder._profile_suffix(natural) == "natural"
 
     def test_parses_normalized_object_trajectories(self):
         tracks = self.builder._parse_object_tracks(
@@ -263,6 +315,35 @@ class TestSplitDataset:
         splits = self.builder.split_dataset(samples)
         total = sum(len(v) for v in splits.values())
         assert total == 100
+
+    def test_split_is_independent_of_input_order(self):
+        forward = self._make_samples(40)
+        reverse = list(reversed(self._make_samples(40)))
+        first = self.builder.split_dataset(forward)
+        second = self.builder.split_dataset(reverse)
+        first_map = {
+            sample.source_video_id: split
+            for split, rows in first.items()
+            for sample in rows
+        }
+        second_map = {
+            sample.source_video_id: split
+            for split, rows in second.items()
+            for sample in rows
+        }
+        assert first_map == second_map
+
+    def test_held_out_domains_never_enter_training_or_validation(self):
+        samples = self._make_samples(40)
+        for index, sample in enumerate(samples):
+            if index % 2 == 0:
+                sample.degradation_domain = "natural"
+        splits = self.builder.split_dataset(samples)
+        for split in ("sft_train", "rl_train", "val"):
+            assert all(
+                sample.degradation_domain not in {"natural", "synthetic_unseen"}
+                for sample in splits[split]
+            )
 
     def test_no_leakage(self):
         """Same source video must not appear in multiple splits."""

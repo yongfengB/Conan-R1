@@ -75,6 +75,53 @@ def sha256_file(path: Path) -> Optional[str]:
     return digest.hexdigest()
 
 
+def checkpoint_component_hashes(checkpoint_root: Path) -> Dict[str, str]:
+    """Hash every inference-defining file in a Conan-R1 checkpoint."""
+    names = {
+        "adapter_config.json",
+        "adapter_model.safetensors",
+        "adapter_model.bin",
+        "chat_template.json",
+        "conan_core.pt",
+        "conan_core_config.json",
+        "preprocessor_config.json",
+        "processor_config.json",
+        "special_tokens_map.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+    }
+    hashes = {
+        path.name: digest
+        for path in sorted(checkpoint_root.iterdir())
+        if path.is_file()
+        and path.name in names
+        and (digest := sha256_file(path)) is not None
+    } if checkpoint_root.is_dir() else {}
+    return hashes
+
+
+def checkpoint_identity(checkpoint_root: Path) -> Tuple[Optional[str], Dict[str, str]]:
+    """Return a canonical identity for LoRA, core visual state, and processor."""
+    components = checkpoint_component_hashes(checkpoint_root)
+    if not components:
+        return None, components
+    payload = json.dumps(components, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest(), components
+
+
+def load_core_protocol(checkpoint_root: Path) -> Dict[str, Any]:
+    """Read the immutable, non-pickle protocol sidecar for a core checkpoint."""
+    path = checkpoint_root / "conan_core_config.json"
+    if not path.is_file():
+        raise FileNotFoundError(f"Core checkpoint metadata not found: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("format_version") != 3:
+        raise ValueError("Only Conan-R1 core checkpoint format version 3 is accepted.")
+    if float(payload.get("motion_v_max", 0.0)) <= 0.0:
+        raise ValueError("Core checkpoint has an invalid motion_v_max.")
+    return payload
+
+
 def code_revision() -> Optional[str]:
     try:
         return subprocess.run(
@@ -118,12 +165,9 @@ def collect_runtime_metadata(
         )
     if checkpoint:
         checkpoint_root = Path(checkpoint)
-        for name in ("adapter_model.safetensors", "adapter_model.bin"):
-            digest = sha256_file(checkpoint_root / name)
-            if digest:
-                metadata["checkpoint_file"] = name
-                metadata["checkpoint_sha256"] = digest
-                break
+        identity, components = checkpoint_identity(checkpoint_root)
+        metadata["checkpoint_identity_sha256"] = identity
+        metadata["checkpoint_files_sha256"] = components
     return metadata
 
 

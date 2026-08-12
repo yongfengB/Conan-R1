@@ -13,6 +13,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from dataset.dataset import SurvVAUDataset
 from model.conan_r1 import ConanR1Model, LoRAConfig
 from training.grpo_trainer import GRPOConfig, GRPOTrainer
+from scripts.train_sft import build_reliability_config, load_motion_vmax
 from scripts._common import (
     finish_distributed,
     init_distributed,
@@ -61,10 +62,29 @@ def main() -> None:
         alpha=int(model_cfg.get("lora_alpha", 32)),
         dropout=float(model_cfg.get("lora_dropout", 0.05)),
     )
-    model = ConanR1Model(model_cfg["base_model"], lora, device=device)
-    model.load_lora(checkpoint, is_trainable=True)
-    ref_model = ConanR1Model(model_cfg["base_model"], lora, device=device)
-    ref_model.load_lora(checkpoint, is_trainable=False)
+    reliability_config = build_reliability_config(raw, model_cfg["base_model"])
+    motion_v_max = load_motion_vmax(raw)
+    factor_names = load_config(model_cfg["method_config"])["degradation_factors"]
+    model = ConanR1Model(
+        model_cfg["base_model"],
+        base_model_revision=model_cfg.get("base_model_revision"),
+        lora_config=lora,
+        device=device,
+        reliability_config=reliability_config,
+        motion_v_max=motion_v_max,
+        degradation_factor_names=factor_names,
+    )
+    model.load_core(checkpoint, is_trainable=True)
+    ref_model = ConanR1Model(
+        model_cfg["base_model"],
+        base_model_revision=model_cfg.get("base_model_revision"),
+        lora_config=lora,
+        device=device,
+        reliability_config=reliability_config,
+        motion_v_max=motion_v_max,
+        degradation_factor_names=factor_names,
+    )
+    ref_model.load_core(checkpoint, is_trainable=False)
     if world_size > 1:
         model.enable_distributed(int(device.rsplit(":", 1)[1]))
 

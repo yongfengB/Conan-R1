@@ -26,6 +26,12 @@ def main() -> None:
     parser.add_argument("--data_dir", default="data/surv_vau")
     parser.add_argument("--split", default="test")
     parser.add_argument("--wts", action="store_true")
+    parser.add_argument(
+        "--decoding",
+        default="greedy",
+        choices=["greedy", "sampling"],
+        help="Decoding protocol used to create the supplied predictions",
+    )
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
@@ -34,7 +40,10 @@ def main() -> None:
         for line in handle:
             if line.strip():
                 row = json.loads(line)
-                prediction_map[row["video_id"]] = row["raw_output"]
+                video_id = str(row["video_id"])
+                if video_id in prediction_map:
+                    raise ValueError(f"Duplicate prediction for {video_id}.")
+                prediction_map[video_id] = str(row["raw_output"])
     dataset = SurvVAUDataset(
         args.data_dir, args.split, require_videos=False
     )
@@ -46,6 +55,10 @@ def main() -> None:
     ]
     if missing:
         raise ValueError(f"Missing predictions for {len(missing)} videos.")
+    reference_ids = {sample["video_id"] for sample in references}
+    extra = sorted(set(prediction_map) - reference_ids)
+    if extra:
+        raise ValueError(f"Predictions contain {len(extra)} out-of-split videos.")
     predictions = [
         prediction_map[sample["video_id"]] for sample in references
     ]
@@ -58,7 +71,7 @@ def main() -> None:
             "model_name": args.model_name or Path(args.predictions_jsonl).stem,
             "prediction_file": args.predictions_jsonl,
             "split": args.split,
-            "decoding": "provided by external system; must be documented",
+            "decoding": args.decoding,
         },
         "metrics": metrics,
         "robustness": {} if args.wts else summarize_robustness(details),

@@ -8,7 +8,9 @@
     "video_id", "source_video_id", "source_dataset", "prompt",
     "degradation_profile", "degradation_level", "degradation_domain",
     "degradation_combination", "synthesis_applied", "degradation_protocol",
-    "gt_interval", "event_type", "event_aliases", "reasoning_target_length",
+    "gt_interval", "event_type", "event_aliases", "task_mask",
+    "source_video_file", "anchor_indices", "motion_pair_indices",
+    "motion_elapsed_sec", "influence_targets", "reasoning_target_length",
     "reasoning_target_source", "duration_sec", "fps", "num_source_frames",
     "type_annotation", "influence_annotation", "reasoning_annotation",
     "conclusion_annotation", "answer_annotation"
@@ -40,6 +42,55 @@
     },
     "event_type": {"type": "string", "minLength": 1},
     "event_aliases": {"type": "array", "items": {"type": "string"}},
+    "task_mask": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "temporal"],
+      "properties": {
+        "event": {"type": "boolean"},
+        "temporal": {"type": "boolean"}
+      },
+      "anyOf": [
+        {"properties": {"event": {"const": true}}},
+        {"properties": {"temporal": {"const": true}}}
+      ]
+    },
+    "source_video_file": {"type": "string", "minLength": 1},
+    "anchor_indices": {
+      "type": "array", "minItems": 25, "maxItems": 25,
+      "items": {"type": "integer", "minimum": 0}
+    },
+    "motion_pair_indices": {
+      "type": "array", "minItems": 25, "maxItems": 25,
+      "items": {
+        "type": "array", "minItems": 2, "maxItems": 2,
+        "prefixItems": [
+          {"type": "integer", "minimum": 0},
+          {"type": "integer", "minimum": 0}
+        ]
+      }
+    },
+    "motion_elapsed_sec": {
+      "type": "array", "minItems": 25, "maxItems": 25,
+      "items": {"type": "number", "exclusiveMinimum": 0}
+    },
+    "influence_targets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["affected_interval", "evidence_branch", "reliability_level", "cue_impact"],
+      "properties": {
+        "affected_interval": {
+          "type": "array", "minItems": 2, "maxItems": 2,
+          "prefixItems": [{"type": "number", "minimum": 0}, {"type": "number", "minimum": 0}]
+        },
+        "evidence_branch": {"enum": ["appearance", "motion", "both"]},
+        "reliability_level": {"type": "number", "minimum": 0, "maximum": 1},
+        "cue_impact": {"type": "string", "minLength": 1}
+      }
+    },
+    "occlusion_token_mask": {
+      "type": ["array", "null"]
+    },
     "reasoning_target_length": {"type": "integer", "minimum": 1},
     "reasoning_target_source": {"enum": ["human", "human_verified", "deterministic_policy"]},
     "duration_sec": {"type": "number", "exclusiveMinimum": 0},
@@ -51,7 +102,11 @@
     "conclusion_annotation": {"type": "string", "minLength": 1},
     "answer_annotation": {
       "type": "string",
-      "pattern": "^event_type: [^;\\[\\]]+; interval: \\[\\d+(?:\\.\\d+)?, \\d+(?:\\.\\d+)?\\]$"
+      "oneOf": [
+        {"pattern": "^event_type: [^;\\[\\]]+$"},
+        {"pattern": "^interval: \\[\\d+(?:\\.\\d+)?, \\d+(?:\\.\\d+)?\\]$"},
+        {"pattern": "^event_type: [^;\\[\\]]+; interval: \\[\\d+(?:\\.\\d+)?, \\d+(?:\\.\\d+)?\\]$"}
+      ]
     }
   }
 }

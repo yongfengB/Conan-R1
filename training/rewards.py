@@ -266,3 +266,47 @@ def compute_total_reward(
         + w_t * _clip01(rt)
         + w_l * _clip01(rl)
     )
+
+
+def compute_task_masked_reward(
+    rd: float,
+    re_: float,
+    rt: float,
+    rl: float,
+    *,
+    event_active: bool,
+    temporal_active: bool,
+    parse_success: bool = True,
+    active_fields_valid: bool = True,
+    w_d: float = 0.25,
+    w_e: float = 0.25,
+    w_t: float = 0.25,
+    w_l: float = 0.25,
+) -> float:
+    """Aggregate rewards after task masking and active-weight renormalization.
+
+    TYPE, INFLUENCE, REASONING, CONCLUSION and ANSWER remain required blocks.
+    The event and temporal fields inside ANSWER are required only when their
+    prompt masks are active.  A malformed required block or active field sets
+    every active reward to zero, as specified in Eq. (28).
+    """
+    weights = {"w_d": w_d, "w_e": w_e, "w_t": w_t, "w_l": w_l}
+    validate_reward_weights(weights)
+    if not parse_success or not active_fields_valid:
+        return 0.0
+    active = [
+        (float(w_d), rd),
+        (float(w_l), rl),
+    ]
+    if event_active:
+        active.append((float(w_e), re_))
+    if temporal_active:
+        active.append((float(w_t), rt))
+    denominator = sum(weight for weight, _ in active)
+    if denominator <= 0.0:
+        raise ValueError("At least one active reward must have positive weight.")
+    if any(not math.isfinite(float(value)) for _, value in active):
+        raise ValueError("Active reward components must be finite.")
+    return _clip01(
+        sum(weight * _clip01(value) for weight, value in active) / denominator
+    )
