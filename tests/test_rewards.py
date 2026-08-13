@@ -57,13 +57,14 @@ def test_temporal_reward_validates_intervals():
     assert 0.0 < compute_rt((0.0, 6.0), (4.0, 10.0)) < 1.0
 
 
-def test_length_reward_uses_explicit_target_and_tolerance():
+def test_length_reward_uses_one_sided_task_budget():
     text = "vehicle brakes and the following vehicle collides"
-    length = effective_length(text)
-    assert compute_rl(text, length, tolerance=0.0) == 1.0
-    assert compute_rl("", length, tolerance=0.0) == 0.0
+    assert compute_rl(text, event_active=True, temporal_active=False) == 1.0
+    long_text = " ".join(f"token{i}" for i in range(120))
+    assert 0.0 < compute_rl(long_text) < 1.0
+    assert compute_rl("", event_active=True, temporal_active=False) == 1.0
     with pytest.raises(TypeError):
-        compute_rl(text, text)
+        compute_rl(text, base_budget="64")
 
 
 def test_total_reward_and_weight_validation():

@@ -43,10 +43,20 @@ def test_source_relative_target_is_detached_and_masks_occlusion():
     degraded = source.detach().clone().requires_grad_(True)
     mask = torch.zeros(1, 2, 3)
     mask[:, 0, 1] = 1.0
-    target = source_relative_target(degraded, source, 8.0, mask)
+    target = source_relative_target(degraded, source, 0.25, mask)
     assert target.requires_grad is False
     assert target[0, 0, 1] == 0.0
     assert target[0, 1, 1] == 1.0
+
+
+def test_source_relative_target_is_dimension_invariant():
+    source = torch.tensor([[[[1.0, -1.0, 1.0, -1.0]]]])
+    degraded = torch.tensor([[[[1.0, -1.0, -1.0, 1.0]]]])
+    small = source_relative_target(degraded, source, 0.25)
+    large = source_relative_target(
+        degraded.repeat(1, 1, 1, 8), source.repeat(1, 1, 1, 8), 0.25
+    )
+    assert torch.allclose(small, large, atol=1e-6)
 
 
 def test_reliability_pathway_shapes_and_normalizations():
@@ -62,6 +72,32 @@ def test_reliability_pathway_shapes_and_normalizations():
     assert torch.allclose(output.event_weights.sum(-1), torch.ones(2, 5))
     assert torch.allclose(output.temporal_attention.sum(-1), torch.ones(2, 5))
     assert torch.all((output.frame_reliability >= 0) & (output.frame_reliability <= 1))
+
+
+def test_cumulative_architecture_switches_change_the_executed_path():
+    config = ReliabilityPathwayConfig(
+        appearance_dim=8,
+        hidden_dim=12,
+        output_dim=16,
+        degradation_dim=6,
+        num_factors=2,
+        max_anchors=3,
+        max_spatial_tokens=4,
+        use_reliability_fusion=False,
+        use_event_aware_pooling=False,
+        use_temporal_reliability=False,
+    )
+    output = ReliabilityAwarePathway(config)(
+        torch.randn(1, 3, 4, 8),
+        torch.randn(1, 3, 4, 3),
+        torch.tensor([[0.0, 0.5, 1.0]]),
+    )
+    assert torch.allclose(
+        output.modality_gates, torch.full_like(output.modality_gates, 0.5)
+    )
+    assert torch.allclose(
+        output.event_weights, torch.full_like(output.event_weights, 0.25)
+    )
 
 
 def test_interventions_preserve_shape_and_shuffle_values():

@@ -34,8 +34,6 @@ def _make_sample(**kwargs) -> StructuredSample:
         gt_interval=(2.0, 8.0),
         event_type="rear-end collision",
         event_aliases=["rear end crash"],
-        reasoning_target_length=48,
-        reasoning_target_source="human_verified",
         duration_sec=10.0,
         fps=25.0,
         num_source_frames=250,

@@ -1,12 +1,13 @@
 model:
   base_model: Qwen/Qwen2.5-VL-3B-Instruct
   base_model_revision: c747f21f03e7d0792c30766310bd7d8de17eeeb3
-  sft_checkpoint: checkpoints/sft30
+  sft_checkpoint: checkpoints/structured_sft
   lora_rank: 16
   lora_alpha: 32
   lora_dropout: 0.05
   method_config: configs/method_config.yaml
-  policy_scope: full
+  policy_scope: lora_only
+  pathway_mode: none
   policy_definition: full_response_changing_policy
 training:
   lr: 1.0e-05
@@ -23,10 +24,10 @@ training:
   temperature: 0.9
   top_p: 0.95
 auxiliary_losses:
-  preserve_during_grpo: true
-  lambda_d_rl: 1.0
-  lambda_q_rl: 1.0
-  lambda_c_rl: 0.1
+  preserve_during_grpo: false
+  lambda_d_rl: 0.0
+  lambda_q_rl: 0.0
+  lambda_c_rl: 0.0
   ema_update_after_optimizer_step: true
 reward:
   w_d: 0.25
@@ -36,8 +37,8 @@ reward:
   lambda_s: 0.5
   lambda_fp: 0.3
   lambda_fn: 0.3
-  length_tolerance: 0.2
-  fixed_reasoning_target_length: 70
+  compactness_base_budget: 32
+  compactness_per_task_budget: 32
   task_masking: true
   renormalize_active_weights: true
   malformed_active_field_zeroes_all_active_rewards: true
@@ -54,5 +55,9 @@ data:
   require_native_motion_pairs: true
   require_influence_targets: true
 output:
-  checkpoint_dir: checkpoints/grpo_fixed_length_70
+  checkpoint_dir: checkpoints/global_grpo
   log_file: training_log.jsonl
+experiment:
+  matrix_block: same_backbone_controls
+  variant: global_grpo
+  base_config: configs/grpo_config.yaml

@@ -1,16 +1,16 @@
 {
-  "annotations_sha256": "37ca3cddd707fae1e855cc5a2e3450e436b11e3e2e2469ff681cc11350e0e3a7",
+  "annotations_sha256": "9fec9f5abd2c5b048a58683fae2974be27af2944a92927795531ef1ee48b71fb",
   "artifact_role": "executable_schema_parser_metric_demo_not_paper_evidence",
-  "dataset_version": "conan-r1-reliability-demo-v2",
+  "dataset_version": "conan-r1-reliability-demo-v3",
   "inner_train_fractions": {
     "rl_train": 0.7,
     "sft_train": 0.3
   },
-  "instance_count": 35,
+  "instance_count": 32,
   "instance_counts": {
     "rl_train": 10,
     "sft_train": 4,
-    "test": 18,
+    "test": 15,
     "val": 3
   },
   "outer_fractions": {
@@ -18,7 +18,7 @@
     "train": 0.7,
     "val": 0.15
   },
-  "raw_predictions_sha256": "0b4c8bf96a1be9d62399dbb3242031482b43fcdd0da2b79c44adfb66ba7317da",
+  "raw_predictions_sha256": "82691610c39947efd0075f174682c74c6147f880268e055d27f29c7e92cf2b54",
   "schema_version": 1,
   "seed": 42,
   "source_count": 20,
@@ -30,7 +30,7 @@
   },
   "source_video_isolation": true,
   "split_rule_id": "source-stratified-70-15-15_then-train-30-70-v1",
-  "splits_sha256": "b097b305c682b8584a891c312d7b5eec0aa298d00600efc6d4963769ab4680c7",
+  "splits_sha256": "2c01922699d4db9ed2ed600882c581c3dfd39d15015dd85d454e014dbb760771",
   "stratification": [
     "source_dataset",
     "event_type"

@@ -19,8 +19,7 @@ from tqdm import tqdm
 from model.conan_r1 import ConanR1Model
 from model.parser import (
     extract_degradation_profile,
-    extract_event_type,
-    extract_temporal_interval,
+    parse_answer_fields,
     parse_structured_output,
 )
 from .grpo_math import clipped_grpo_loss, normalize_group_advantages
@@ -66,16 +65,21 @@ class GRPOConfig:
     lambda_s: float = 0.5
     lambda_fp: float = 0.3
     lambda_fn: float = 0.3
-    # Compactness reward
-    length_tolerance: float = 0.20
-    fixed_reasoning_target_length: Optional[int] = None
+    # One-sided compactness reward
+    compactness_base_budget: int = 32
+    compactness_per_task_budget: int = 32
     # Structural ablation
     allow_missing_type_influence: bool = False
     policy_scope: str = "full"
+    pathway_mode: str = "reliability"
+    task_masking: bool = True
     preserve_during_grpo: bool = True
     lambda_d_rl: float = 1.0
     lambda_q_rl: float = 1.0
     lambda_c_rl: float = 0.1
+    reliability_target: str = "ema"
+    occlusion_mask_adjustment: bool = True
+    ema_update_after_optimizer_step: bool = True
 
     @classmethod
     def from_yaml(cls, path: str) -> "GRPOConfig":
@@ -108,6 +112,10 @@ class GRPOConfig:
             raise ValueError("update_epochs must be at least 1.")
         if instance.policy_scope not in {"full", "lora_only"}:
             raise ValueError("policy_scope must be full or lora_only.")
+        if instance.pathway_mode not in {"reliability", "none"}:
+            raise ValueError("pathway_mode must be reliability or none.")
+        if instance.pathway_mode == "none" and instance.policy_scope != "lora_only":
+            raise ValueError("A policy without the reliability pathway is LoRA-only.")
         if instance.lr <= 0.0 or instance.epochs < 1:
             raise ValueError("GRPO lr and epochs must be positive.")
         if not 0.0 < instance.clip_eps < 1.0 or instance.kl_coef < 0.0:
@@ -124,6 +132,28 @@ class GRPOConfig:
             raise ValueError(
                 "lambda_c_rl must be zero when TYPE or INFLUENCE may be absent."
             )
+        if instance.preserve_during_grpo and (
+            instance.pathway_mode == "none" or instance.policy_scope != "full"
+        ):
+            raise ValueError(
+                "Auxiliary preservation requires the full reliability policy."
+            )
+        target_aliases = {
+            "frozen_appearance_teacher_plus_ema_motion_teacher": "ema",
+            "ema": "ema",
+            "online_motion_target": "online",
+            "online": "online",
+            "frozen_motion_teacher": "frozen_initial",
+            "frozen_initial": "frozen_initial",
+        }
+        if instance.reliability_target not in target_aliases:
+            raise ValueError("Unsupported reliability_target.")
+        instance.reliability_target = target_aliases[instance.reliability_target]
+        if (
+            instance.reliability_target == "frozen_initial"
+            and instance.ema_update_after_optimizer_step
+        ):
+            raise ValueError("A frozen motion teacher cannot receive EMA updates.")
         return instance
 
 
@@ -180,6 +210,16 @@ class GRPOTrainer:
         self.model.enable_gradient_checkpointing()
         self.model.disable_dropout()
         self.ref_model.disable_dropout()
+        if self.config.policy_scope == "lora_only":
+            for module in (
+                self.model.reliability_pathway,
+                self.model.consistency_readouts,
+                self.model.motion_teacher,
+            ):
+                if module is None:
+                    continue
+                for parameter in module.parameters():
+                    parameter.requires_grad_(False)
         for module in (
             self.ref_model.model,
             self.ref_model.reliability_pathway,
@@ -261,7 +301,27 @@ class GRPOTrainer:
 
         event_active = bool(sample.get("task_mask", {}).get("event", True))
         temporal_active = bool(sample.get("task_mask", {}).get("temporal", True))
-        predicted_event = extract_event_type(parsed.answer_block)
+        if not self.config.task_masking:
+            event_active = temporal_active = True
+        answer_fields = parse_answer_fields(
+            parsed.answer_block,
+            event_active=event_active,
+            temporal_active=temporal_active,
+            duration_sec=float(sample.get("duration_sec", 0.0)),
+        )
+        if answer_fields is None:
+            return RewardBreakdown(
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                float(event_active),
+                float(temporal_active),
+                0.0,
+            )
+        predicted_event = answer_fields.event_type
         event_aliases = sample.get("event_aliases", [])
         re_score = compute_re(
             predicted_event,
@@ -269,7 +329,7 @@ class GRPOTrainer:
             aliases=event_aliases,
         )
 
-        predicted_interval = extract_temporal_interval(parsed.answer_block)
+        predicted_interval = answer_fields.interval
         gt_interval = tuple(sample.get("gt_interval", [0.0, 1.0]))
         rt = compute_rt(
             predicted_interval,
@@ -277,18 +337,14 @@ class GRPOTrainer:
             duration_sec=float(sample.get("duration_sec", 0.0)),
         )
 
-        target_length = self.config.fixed_reasoning_target_length
-        if target_length is None:
-            target_length = int(sample.get("reasoning_target_length", 0))
         rl = compute_rl(
             parsed.reasoning_block,
-            target_length,
-            tolerance=self.config.length_tolerance,
+            event_active=event_active,
+            temporal_active=temporal_active,
+            base_budget=self.config.compactness_base_budget,
+            per_task_budget=self.config.compactness_per_task_budget,
         )
-        active_fields_valid = (
-            (not event_active or predicted_event is not None)
-            and (not temporal_active or predicted_interval is not None)
-        )
+        active_fields_valid = True
         total = compute_task_masked_reward(
             rd,
             re_score,
@@ -324,17 +380,8 @@ class GRPOTrainer:
         reward_breakdowns = [
             self._reward_breakdown(response, sample) for response in responses
         ]
-        reward_tensor = torch.tensor(
-            [item.total for item in reward_breakdowns],
-            dtype=torch.float32,
-            device=self.model.device,
-        )
-        advantages = normalize_group_advantages(reward_tensor)
-
-        candidates: List[CandidateRollout] = []
-        for response, advantage, rewards in zip(
-            responses, advantages, reward_breakdowns
-        ):
+        retained = []
+        for response, rewards in zip(responses, reward_breakdowns):
             old_log_probs = self.model.response_token_log_probs(
                 frames, prompt, response, require_grad=False, **visual_context
             ).detach()
@@ -347,6 +394,19 @@ class GRPOTrainer:
                 raise RuntimeError(
                     "Policy and reference tokenization produced different lengths."
                 )
+            retained.append((response, rewards, old_log_probs, reference_log_probs))
+        if not retained:
+            raise RuntimeError("No response tokens were generated for this rollout.")
+        reward_tensor = torch.tensor(
+            [item[1].total for item in retained],
+            dtype=torch.float32,
+            device=self.model.device,
+        )
+        advantages = normalize_group_advantages(reward_tensor)
+        candidates: List[CandidateRollout] = []
+        for (response, rewards, old_log_probs, reference_log_probs), advantage in zip(
+            retained, advantages
+        ):
             candidates.append(
                 CandidateRollout(
                     response=response,
@@ -356,8 +416,6 @@ class GRPOTrainer:
                     rewards=rewards,
                 )
             )
-        if not candidates:
-            raise RuntimeError("No response tokens were generated for this rollout.")
         return candidates
 
     def _optimize_rollout(
@@ -374,18 +432,28 @@ class GRPOTrainer:
             self.optimizer.zero_grad(set_to_none=True)
             update_losses = []
             for candidate in candidates:
-                current_log_probs, degraded_state = self.model.response_token_log_probs_with_state(
-                    frames,
-                    prompt,
-                    candidate.response,
-                    require_grad=True,
-                    require_diagnostic_slots=(
-                        self.config.preserve_during_grpo
-                        and self.config.policy_scope == "full"
-                        and self.config.lambda_c_rl > 0.0
-                    ),
-                    **visual_context,
-                )
+                if self.model.reliability_pathway is None:
+                    current_log_probs = self.model.response_token_log_probs(
+                        frames,
+                        prompt,
+                        candidate.response,
+                        require_grad=True,
+                    )
+                    degraded_state = None
+                else:
+                    current_log_probs, degraded_state = (
+                        self.model.response_token_log_probs_with_state(
+                            frames,
+                            prompt,
+                            candidate.response,
+                            require_grad=True,
+                            require_diagnostic_slots=(
+                                self.config.preserve_during_grpo
+                                and self.config.lambda_c_rl > 0.0
+                            ),
+                            **visual_context,
+                        )
+                    )
                 loss, diagnostics = clipped_grpo_loss(
                     current_log_probs=current_log_probs,
                     old_log_probs=candidate.old_log_probs,
@@ -394,7 +462,7 @@ class GRPOTrainer:
                     clip_eps=self.config.clip_eps,
                     kl_coef=self.config.kl_coef,
                 )
-                if self.config.preserve_during_grpo and self.config.policy_scope == "full":
+                if self.config.preserve_during_grpo:
                     source_frames, source_context = self._source_visual_context(sample)
                     _, source_state = self.model.response_token_log_probs_with_state(
                         source_frames,
@@ -423,6 +491,10 @@ class GRPOTrainer:
                         occlusion_token_mask=mask,
                         timestamps=timestamps,
                         compute_consistency=self.config.lambda_c_rl > 0.0,
+                        motion_target_mode=self.config.reliability_target,
+                        occlusion_mask_adjustment=(
+                            self.config.occlusion_mask_adjustment
+                        ),
                     )
                     loss = stage2_loss(
                         loss,
@@ -454,7 +526,11 @@ class GRPOTrainer:
             require_finite(gradient_norm, "GRPO gradient norm")
             self.scaler.step(self.optimizer)
             self.scaler.update()
-            if self.model.motion_teacher is not None and self.config.policy_scope == "full":
+            if (
+                self.model.motion_teacher is not None
+                and self.config.policy_scope == "full"
+                and self.config.ema_update_after_optimizer_step
+            ):
                 self.model.update_motion_teacher()
             self.optimizer_step += 1
             losses.extend(update_losses)
@@ -538,14 +614,18 @@ class GRPOTrainer:
                 motion_array = (
                     motion_tensor.permute(0, 2, 3, 1).cpu().numpy() * 255
                 ).astype("uint8")
-                visual_context = {
-                    "motion_frames": [
-                        motion_array[index]
-                        for index in range(motion_array.shape[0])
-                    ],
-                    "elapsed_seconds": sample["motion_elapsed_sec"],
-                    "timestamps": sample["anchor_timestamps_sec"],
-                }
+                visual_context = (
+                    {
+                        "motion_frames": [
+                            motion_array[index]
+                            for index in range(motion_array.shape[0])
+                        ],
+                        "elapsed_seconds": sample["motion_elapsed_sec"],
+                        "timestamps": sample["anchor_timestamps_sec"],
+                    }
+                    if self.model.reliability_pathway is not None
+                    else {}
+                )
                 prompt = sample["prompt"]
 
                 candidates = self._collect_rollout(
@@ -614,7 +694,10 @@ class GRPOTrainer:
         if not is_main_process():
             return
         os.makedirs(path, exist_ok=True)
-        self.model.save_core(path)
+        if self.model.reliability_pathway is None:
+            self.model.save_lora(path)
+        else:
+            self.model.save_core(path)
         torch.save(self.optimizer.state_dict(), os.path.join(path, "optimizer.pt"))
         torch.save(self.scaler.state_dict(), os.path.join(path, "scaler.pt"))
         with open(

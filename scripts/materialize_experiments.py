@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create immutable GRPO ablation YAML files from the experiment matrix."""
+"""Create immutable, complete YAML files for every manuscript control."""
 from __future__ import annotations
 
 import argparse
@@ -24,35 +24,56 @@ def materialize(
     matrix_path: Path, output_dir: Path, overwrite: bool = False
 ) -> Dict[str, str]:
     matrix = yaml.safe_load(matrix_path.read_text(encoding="utf-8"))
-    block = matrix["stage2_reward"]
-    base_path = Path("configs/grpo_config.yaml")
-    if "base_config" in block:
-        base_path = Path(block["base_config"])
-    base = yaml.safe_load(base_path.read_text(encoding="utf-8"))
+    block_names = matrix.get(
+        "materialized_blocks",
+        ["stage1_architecture", "stage2_reward", "matched_stage2", "appendix_controls"],
+    )
+    blocks = [(name, matrix[name]) for name in block_names]
     output_dir.mkdir(parents=True, exist_ok=True)
-    expected_names = {f"{variant['name']}.yaml" for variant in block["variants"]}
+    expected_names = {
+        f"{variant['name']}.yaml"
+        for _, block in blocks
+        for variant in block["variants"]
+        if variant.get("materialize", True)
+    }
     if overwrite:
         for stale in output_dir.glob("*.yaml"):
             if stale.name not in expected_names:
                 stale.unlink()
     hashes = {}
 
-    variants = list(block["variants"])
-    for variant in variants:
-        resolved = copy.deepcopy(base)
-        for dotted_key, value in variant.get("overrides", {}).items():
-            deep_set(resolved, dotted_key, value)
-        resolved.setdefault("output", {})["checkpoint_dir"] = (
-            f"checkpoints/grpo_{variant['name']}"
-        )
-        target = output_dir / f"{variant['name']}.yaml"
-        if target.exists() and not overwrite:
-            raise FileExistsError(
-                f"{target} already exists; pass --overwrite to regenerate it."
+    seen = set()
+    for block_name, block in blocks:
+        for variant in block["variants"]:
+            if not variant.get("materialize", True):
+                continue
+            name = variant["name"]
+            if name in seen:
+                raise ValueError(f"Duplicate materialized experiment name: {name}")
+            seen.add(name)
+            base_path = Path(variant.get("base_config", block["base_config"]))
+            resolved = yaml.safe_load(base_path.read_text(encoding="utf-8"))
+            resolved = copy.deepcopy(resolved)
+            for dotted_key, value in variant.get("overrides", {}).items():
+                deep_set(resolved, dotted_key, value)
+            resolved.setdefault("experiment", {}).update(
+                {
+                    "matrix_block": block_name,
+                    "variant": name,
+                    "base_config": str(base_path),
+                }
             )
-        payload = yaml.safe_dump(resolved, sort_keys=False)
-        target.write_text(payload, encoding="utf-8")
-        hashes[str(target)] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+            resolved.setdefault("output", {})["checkpoint_dir"] = variant.get(
+                "checkpoint_dir", f"checkpoints/{name}"
+            )
+            target = output_dir / f"{name}.yaml"
+            if target.exists() and not overwrite:
+                raise FileExistsError(
+                    f"{target} already exists; pass --overwrite to regenerate it."
+                )
+            payload = yaml.safe_dump(resolved, sort_keys=False)
+            target.write_text(payload, encoding="utf-8")
+            hashes[str(target)] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     manifest = output_dir / "SHA256SUMS.json"
     manifest.write_text(json.dumps(hashes, indent=2), encoding="utf-8")

@@ -65,6 +65,21 @@ def test_vehicle_mask_never_falls_back_to_a_center_rectangle():
         )
 
 
+def test_vehicle_mask_requires_an_event_relevant_track():
+    frames = [np.full((32, 32, 3), 255, dtype=np.uint8) for _ in range(3)]
+    irrelevant = ObjectTrack(
+        track_id="background",
+        category="vehicle",
+        event_relevant=False,
+        boxes=[TrackBox(0, (0.1, 0.1, 0.3, 0.3)), TrackBox(2, (0.2, 0.1, 0.4, 0.3))],
+    )
+    with pytest.raises(SpatialAnnotationError):
+        synthesize_degradation(
+            _clip(frames, [irrelevant]),
+            DegradationProfile([("vehicle_mask", 0.4)], 0.4),
+        )
+
+
 def test_interaction_mask_uses_a_stable_track_pair_not_top_left():
     frames = [np.full((100, 100, 3), 255, dtype=np.uint8) for _ in range(3)]
     first = _track("a", [(0, (0.30, 0.40, 0.42, 0.62)), (2, (0.36, 0.40, 0.48, 0.62))])
@@ -111,6 +126,36 @@ def test_protocol_defines_and_samples_k_distribution():
     assert frequencies[1] == pytest.approx(0.60, abs=0.04)
     assert frequencies[2] == pytest.approx(0.30, abs=0.04)
     assert frequencies[3] == pytest.approx(0.10, abs=0.03)
+
+
+def test_weather_and_tunnel_operators_enforce_scene_compatibility():
+    frames = [np.zeros((16, 16, 3), dtype=np.uint8) for _ in range(3)]
+    tunnel = _clip(frames)
+    tunnel.scene_environment = "tunnel"
+    with pytest.raises(ValueError):
+        synthesize_degradation(
+            tunnel, DegradationProfile([("rain_snow", 0.2)], 0.2)
+        )
+    outdoor = _clip(frames)
+    with pytest.raises(ValueError):
+        synthesize_degradation(
+            outdoor, DegradationProfile([("tunnel_low_light", 0.2)], 0.2)
+        )
+
+
+def test_profile_sampler_never_mixes_outdoor_weather_with_tunnel_low_light():
+    protocol = load_degradation_protocol()
+    for environment in ("outdoor", "tunnel", "indoor"):
+        rng = np.random.default_rng(123)
+        for _ in range(200):
+            profile = sample_degradation_profile(
+                rng, 0.4, protocol, scene_environment=environment
+            )
+            names = {name for name, _ in profile.factors}
+            if environment == "tunnel":
+                assert not names & {"rain_snow", "fog", "low_light"}
+            elif environment == "outdoor":
+                assert "tunnel_low_light" not in names
 
 
 def test_unseen_profile_contains_a_held_out_operator():

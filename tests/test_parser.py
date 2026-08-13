@@ -4,6 +4,7 @@ from model.parser import (
     extract_degradation_profile,
     extract_event_type,
     extract_temporal_interval,
+    parse_answer_fields,
     parse_structured_output,
 )
 
@@ -152,3 +153,50 @@ class TestExtractDegradationProfile:
     )
     def test_malformed_profile(self, value):
         assert extract_degradation_profile(value) is None
+
+    def test_duplicate_factor_is_rejected(self):
+        assert extract_degradation_profile("fog:0.2; fog:0.8") is None
+
+
+class TestParseAnswerFields:
+    def test_joint_contract(self):
+        parsed = parse_answer_fields(
+            "event_type: rear-end collision; interval: [2.5, 8.0]",
+            event_active=True,
+            temporal_active=True,
+            duration_sec=10.0,
+        )
+        assert parsed is not None
+        assert parsed.event_type == "rear-end collision"
+        assert parsed.interval == pytest.approx((2.5, 8.0))
+
+    def test_task_mask_forbids_inactive_field(self):
+        assert parse_answer_fields(
+            "event_type: collision; interval: [1, 2]",
+            event_active=False,
+            temporal_active=True,
+            duration_sec=3.0,
+        ) is None
+        assert parse_answer_fields(
+            "interval: [1, 2]",
+            event_active=False,
+            temporal_active=True,
+            duration_sec=3.0,
+        ) is not None
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            "event_type: collision; interval: [1, 2]; confidence: 1",
+            "answer is event_type: collision; interval: [1, 2]",
+            "event_type: collision; event_type: collision; interval: [1, 2]",
+            "event_type: collision; interval: [1, 4]",
+        ],
+    )
+    def test_noncanonical_or_out_of_clip_answer_is_rejected(self, answer):
+        assert parse_answer_fields(
+            answer,
+            event_active=True,
+            temporal_active=True,
+            duration_sec=3.0,
+        ) is None

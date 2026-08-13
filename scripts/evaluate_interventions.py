@@ -15,15 +15,17 @@ sys.path.insert(0, str(REPO_ROOT))
 from dataset.dataset import SurvVAUDataset
 from evaluation.evaluator import Evaluator
 from model.conan_r1 import ConanR1Model, LoRAConfig
-from model.reliability_pathway import RELIABILITY_INTERVENTIONS
+from model.reliability_pathway import (
+    RELIABILITY_INTERVENTIONS,
+    ReliabilityPathwayConfig,
+)
 from scripts._common import (
     collect_runtime_metadata,
-    load_config,
+    load_core_protocol,
     require_dataset,
     resolve_device,
     seed_everything,
 )
-from scripts.train_sft import build_reliability_config, load_motion_vmax
 
 
 def frame_lists(sample: dict):
@@ -40,7 +42,6 @@ def frame_lists(sample: dict):
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--config", default="configs/grpo_config.yaml")
     parser.add_argument("--data_dir", default="data/surv_vau")
     parser.add_argument("--split", default="test", choices=["val", "test"])
     parser.add_argument("--base_model", default="Qwen/Qwen2.5-VL-3B-Instruct")
@@ -61,23 +62,24 @@ def main() -> None:
     )
     require_dataset(args.data_dir)
     seed_everything(args.seed)
-    raw = load_config(args.config)
     dataset = SurvVAUDataset(
         args.data_dir, args.split, args.num_frames, args.frame_size
     )
     checkpoint = Path(args.checkpoint)
     if not checkpoint.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint}")
+    core_protocol = load_core_protocol(checkpoint)
     model = ConanR1Model(
         args.base_model,
         base_model_revision=args.base_model_revision,
         lora_config=LoRAConfig(),
         device=resolve_device(args.device),
-        reliability_config=build_reliability_config(raw, args.base_model),
-        motion_v_max=load_motion_vmax(raw),
-        degradation_factor_names=load_config(raw["model"]["method_config"])[
-            "degradation_factors"
-        ],
+        reliability_config=ReliabilityPathwayConfig(
+            **core_protocol["reliability_config"]
+        ),
+        motion_v_max=float(core_protocol["motion_v_max"]),
+        degradation_factor_names=core_protocol["degradation_factor_names"],
+        motion_flow_parameters=core_protocol["motion_flow_parameters"],
     )
     model.load_core(args.checkpoint, is_trainable=False)
 

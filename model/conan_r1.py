@@ -8,10 +8,14 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 import numpy as np
-import cv2
 import torch
 import torch.nn.functional as F
 from PIL import Image
+from dataset.video_utils import (
+    FARNEBACK_PARAMETERS,
+    farneback_pair_flow,
+    validate_farneback_parameters,
+)
 from peft import LoraConfig, PeftModel, get_peft_model
 from torch.nn.parallel import DistributedDataParallel
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
@@ -77,6 +81,7 @@ class ConanR1Model:
         reliability_config: Optional[ReliabilityPathwayConfig] = None,
         motion_v_max: Optional[float] = None,
         degradation_factor_names: Optional[List[str]] = None,
+        motion_flow_parameters: Optional[dict] = None,
     ) -> None:
         self.base_model_name = base_model
         self.base_model_revision = base_model_revision
@@ -107,6 +112,9 @@ class ConanR1Model:
         self.consistency_readouts = None
         self.reliability_adapter = None
         self.motion_v_max = motion_v_max
+        self.motion_flow_parameters = validate_farneback_parameters(
+            motion_flow_parameters or FARNEBACK_PARAMETERS
+        )
         self.degradation_factor_names = list(degradation_factor_names or [])
         if reliability_config is not None:
             if len(self.degradation_factor_names) != reliability_config.num_factors:
@@ -223,6 +231,8 @@ class ConanR1Model:
         occlusion_token_mask: torch.Tensor,
         timestamps: torch.Tensor,
         compute_consistency: bool = True,
+        motion_target_mode: str = "ema",
+        occlusion_mask_adjustment: bool = True,
     ):
         """Compute the three visual constraints from paired pathway forwards."""
         from .reliability_pathway import (
@@ -236,22 +246,30 @@ class ConanR1Model:
         if self.motion_teacher is None or self.consistency_readouts is None:
             raise RuntimeError("Auxiliary losses require the complete reliability policy.")
         config = self.reliability_pathway.config
+        if motion_target_mode not in {"ema", "online", "frozen_initial"}:
+            raise ValueError(
+                "motion_target_mode must be ema, online, or frozen_initial."
+            )
+        target_mask = occlusion_token_mask if occlusion_mask_adjustment else None
         appearance_target = source_relative_target(
             degraded.appearance_tokens,
             source.appearance_tokens,
             config.tau_appearance,
-            occlusion_token_mask,
+            target_mask,
         )
         with torch.no_grad():
-            degraded_motion_teacher = self.motion_teacher(
-                degraded.motion_representation
+            motion_encoder = (
+                self.reliability_pathway.motion_encoder
+                if motion_target_mode == "online"
+                else self.motion_teacher
             )
-            source_motion_teacher = self.motion_teacher(source.motion_representation)
+            degraded_motion_teacher = motion_encoder(degraded.motion_representation)
+            source_motion_teacher = motion_encoder(source.motion_representation)
         motion_target = source_relative_target(
             degraded_motion_teacher,
             source_motion_teacher,
             config.tau_motion,
-            occlusion_token_mask,
+            target_mask,
         )
         rel = reliability_loss(
             degraded.pathway_output.appearance_reliability,
@@ -285,33 +303,16 @@ class ConanR1Model:
         )
         return deg, rel, cons
 
-    @staticmethod
     def _dense_flow(
-        frames: List[np.ndarray], motion_frames: List[np.ndarray]
+        self, frames: List[np.ndarray], motion_frames: List[np.ndarray]
     ) -> torch.Tensor:
         if len(frames) != len(motion_frames) or not frames:
             raise ValueError("Each anchor needs one adjacent native-rate motion frame.")
         flows = []
         for first, second in zip(frames, motion_frames):
-            if first.shape[:2] != second.shape[:2]:
-                second = cv2.resize(
-                    second, (first.shape[1], first.shape[0]), interpolation=cv2.INTER_LINEAR
-                )
-            first_gray = cv2.cvtColor(first.astype(np.uint8), cv2.COLOR_RGB2GRAY)
-            second_gray = cv2.cvtColor(second.astype(np.uint8), cv2.COLOR_RGB2GRAY)
-            flow = cv2.calcOpticalFlowFarneback(
-                first_gray,
-                second_gray,
-                None,
-                pyr_scale=0.5,
-                levels=3,
-                winsize=15,
-                iterations=3,
-                poly_n=5,
-                poly_sigma=1.2,
-                flags=0,
+            flows.append(
+                farneback_pair_flow(first, second, self.motion_flow_parameters)
             )
-            flows.append(flow)
         return torch.from_numpy(np.stack(flows).astype(np.float32))[None]
 
     def _adapt_reliability_inputs(
@@ -389,11 +390,12 @@ class ConanR1Model:
             raise RuntimeError("Cannot save a full core checkpoint without visual modules.")
         metadata = {
             "method": "conan-r1-source-relative-reliability-v2",
-            "format_version": 3,
+            "format_version": 4,
             "base_model": self.base_model_name,
             "base_model_revision": self.base_model_revision,
             "reliability_config": asdict(self.reliability_pathway.config),
             "motion_v_max": float(self.motion_v_max),
+            "motion_flow_parameters": self.motion_flow_parameters,
             "degradation_factor_names": list(self.degradation_factor_names),
         }
         (Path(checkpoint_path) / "conan_core_config.json").write_text(
@@ -420,9 +422,9 @@ class ConanR1Model:
         if self.reliability_pathway is None or self.consistency_readouts is None:
             raise RuntimeError("Attach the configured reliability pathway before loading.")
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        if metadata.get("format_version") != 3:
+        if metadata.get("format_version") != 4:
             raise ValueError(
-                "Core checkpoint lacks the v3 protocol metadata; it cannot be "
+                "Core checkpoint lacks the v4 flow-bound protocol metadata; it cannot be "
                 "safely matched to the revised method."
             )
         expected = {
@@ -431,6 +433,7 @@ class ConanR1Model:
             "base_model_revision": self.base_model_revision,
             "reliability_config": asdict(self.reliability_pathway.config),
             "motion_v_max": float(self.motion_v_max),
+            "motion_flow_parameters": self.motion_flow_parameters,
             "degradation_factor_names": list(self.degradation_factor_names),
         }
         mismatches = {

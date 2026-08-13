@@ -10,6 +10,64 @@ from .types import VideoLoadError
 
 logger = logging.getLogger(__name__)
 
+FARNEBACK_PARAMETERS = {
+    "pyr_scale": 0.5,
+    "levels": 3,
+    "winsize": 15,
+    "iterations": 3,
+    "poly_n": 5,
+    "poly_sigma": 1.2,
+    "flags": 0,
+}
+
+
+def validate_farneback_parameters(parameters: dict) -> dict:
+    """Return a normalized complete parameter mapping for the frozen flow."""
+    if set(parameters) != set(FARNEBACK_PARAMETERS):
+        raise ValueError(
+            "Farneback parameters must define exactly "
+            f"{sorted(FARNEBACK_PARAMETERS)}."
+        )
+    normalized = {
+        "pyr_scale": float(parameters["pyr_scale"]),
+        "levels": int(parameters["levels"]),
+        "winsize": int(parameters["winsize"]),
+        "iterations": int(parameters["iterations"]),
+        "poly_n": int(parameters["poly_n"]),
+        "poly_sigma": float(parameters["poly_sigma"]),
+        "flags": int(parameters["flags"]),
+    }
+    if not 0.0 < normalized["pyr_scale"] < 1.0:
+        raise ValueError("Farneback pyr_scale must lie in (0, 1).")
+    if min(
+        normalized["levels"],
+        normalized["winsize"],
+        normalized["iterations"],
+        normalized["poly_n"],
+    ) < 1:
+        raise ValueError("Farneback integer parameters must be positive.")
+    if normalized["poly_sigma"] <= 0.0:
+        raise ValueError("Farneback poly_sigma must be positive.")
+    return normalized
+
+
+def farneback_pair_flow(
+    first: np.ndarray,
+    second: np.ndarray,
+    parameters: dict = FARNEBACK_PARAMETERS,
+) -> np.ndarray:
+    """Estimate one RGB-frame displacement field with explicit parameters."""
+    parameters = validate_farneback_parameters(parameters)
+    if first.shape[:2] != second.shape[:2]:
+        second = cv2.resize(
+            second, (first.shape[1], first.shape[0]), interpolation=cv2.INTER_LINEAR
+        )
+    first_gray = cv2.cvtColor(first.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+    second_gray = cv2.cvtColor(second.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+    return cv2.calcOpticalFlowFarneback(
+        first_gray, second_gray, None, **parameters
+    ).astype(np.float32)
+
 
 def uniform_sample_indices(total_frames: int, n: int = 25) -> List[int]:
     """Return the exact integer indices used by the uniform frame sampler."""
@@ -67,21 +125,9 @@ def farneback_native_flow(
     pairs = native_motion_pairs(len(frames), n=n, offset=offset)
     flows = []
     for first_index, second_index in pairs:
-        first = cv2.cvtColor(frames[first_index], cv2.COLOR_RGB2GRAY)
-        second = cv2.cvtColor(frames[second_index], cv2.COLOR_RGB2GRAY)
-        flow = cv2.calcOpticalFlowFarneback(
-            first,
-            second,
-            None,
-            pyr_scale=0.5,
-            levels=3,
-            winsize=15,
-            iterations=3,
-            poly_n=5,
-            poly_sigma=1.2,
-            flags=0,
+        flows.append(
+            farneback_pair_flow(frames[first_index], frames[second_index])
         )
-        flows.append(flow.astype(np.float32))
     return flows, pairs
 
 

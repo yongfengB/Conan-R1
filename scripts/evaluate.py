@@ -18,6 +18,7 @@ from evaluation.robustness import (
     validate_robustness_coverage,
 )
 from model.conan_r1 import ConanR1Model
+from model.reliability_pathway import ReliabilityPathwayConfig
 from scripts._common import (
     collect_runtime_metadata,
     load_core_protocol,
@@ -25,8 +26,6 @@ from scripts._common import (
     resolve_device,
     seed_everything,
 )
-from scripts._common import load_config
-from scripts.train_sft import build_reliability_config, load_motion_vmax
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,6 +55,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default=None)
     parser.add_argument("--wts", action="store_true", help="Include CIDEr/VQA metrics")
+    parser.add_argument(
+        "--robustness_scope",
+        choices=["none", "synthetic", "complete"],
+        default="synthetic",
+        help=(
+            "synthetic requires clean/seen/unseen protocol coverage; complete "
+            "additionally requires a separate natural source-observation partition"
+        ),
+    )
     parser.add_argument("--output", default="results/evaluation.json")
     return parser.parse_args()
 
@@ -73,28 +81,34 @@ def main() -> None:
     if not dataset:
         raise RuntimeError(f"The {args.split} split contains no samples.")
 
+    core_protocol = (
+        load_core_protocol(Path(args.checkpoint))
+        if args.checkpoint and args.checkpoint_type == "core"
+        else None
+    )
     model = ConanR1Model(
         args.base_model,
         base_model_revision=args.base_model_revision,
         device=resolve_device(args.device),
         enable_lora=args.checkpoint is not None,
         reliability_config=(
-            build_reliability_config(
-                load_config("configs/grpo_config.yaml"), args.base_model
-            )
-            if args.checkpoint and args.checkpoint_type == "core"
+            ReliabilityPathwayConfig(**core_protocol["reliability_config"])
+            if core_protocol is not None
             else None
         ),
         motion_v_max=(
-            float(load_core_protocol(Path(args.checkpoint))["motion_v_max"])
-            if args.checkpoint and args.checkpoint_type == "core"
+            float(core_protocol["motion_v_max"])
+            if core_protocol is not None
             else None
         ),
         degradation_factor_names=(
-            load_config(
-                load_config("configs/grpo_config.yaml")["model"]["method_config"]
-            )["degradation_factors"]
-            if args.checkpoint and args.checkpoint_type == "core"
+            core_protocol["degradation_factor_names"]
+            if core_protocol is not None
+            else None
+        ),
+        motion_flow_parameters=(
+            core_protocol["motion_flow_parameters"]
+            if core_protocol is not None
             else None
         ),
     )
@@ -140,8 +154,18 @@ def main() -> None:
     metrics, per_sample = Evaluator().evaluate(
         predictions, references, include_wts_metrics=args.wts
     )
-    coverage = None if args.wts else validate_robustness_coverage(per_sample)
-    robustness = {} if args.wts else summarize_robustness(per_sample)
+    robustness_enabled = not args.wts and args.robustness_scope != "none"
+    coverage = None
+    if robustness_enabled:
+        required_domains = (
+            ("clean", "synthetic_seen", "synthetic_unseen", "natural")
+            if args.robustness_scope == "complete"
+            else ("clean", "synthetic_seen", "synthetic_unseen")
+        )
+        coverage = validate_robustness_coverage(
+            per_sample, required_domains=required_domains
+        )
+    robustness = summarize_robustness(per_sample) if robustness_enabled else {}
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with open(output, "w", encoding="utf-8") as handle:
@@ -159,7 +183,10 @@ def main() -> None:
                     "max_new_tokens": args.max_new_tokens,
                     "decoding": "greedy",
                     "seed": args.seed,
-                    "complete_robustness_coverage": None if args.wts else True,
+                    "complete_robustness_coverage": (
+                        None if args.wts else args.robustness_scope == "complete"
+                    ),
+                    "robustness_scope": args.robustness_scope,
                 },
                 "metrics": metrics,
                 "robustness_coverage": coverage,

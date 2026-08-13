@@ -65,6 +65,7 @@ class SurvVAUDataset(Dataset):
         frame_size: int = 224,
         require_videos: bool = True,
         enabled_blocks=BLOCK_ORDER,
+        force_joint_task: bool = False,
     ) -> None:
         requested_splits = [split] if isinstance(split, str) else list(split)
         if not requested_splits or not set(requested_splits).issubset(VALID_SPLITS):
@@ -79,6 +80,7 @@ class SurvVAUDataset(Dataset):
         self.frame_size = frame_size
         self.require_videos = require_videos
         self.enabled_blocks = tuple(str(block).upper() for block in enabled_blocks)
+        self.force_joint_task = bool(force_joint_task)
         # Validate once at construction rather than failing mid-epoch.
         structured_output_instruction(self.enabled_blocks)
         self.samples: List[Dict] = []
@@ -190,6 +192,8 @@ class SurvVAUDataset(Dataset):
         source_motion_tensor = torch.from_numpy(source_motion_np).permute(0, 3, 1, 2)
 
         task_mask = obj.get("task_mask", {"event": True, "temporal": True})
+        if self.force_joint_task:
+            task_mask = {"event": True, "temporal": True}
         if not isinstance(task_mask, dict) or not {"event", "temporal"}.issubset(task_mask):
             raise ValueError(f"{obj['video_id']}: task_mask must define event and temporal")
         anchor_indices = [int(first) for first, _ in motion_pairs]
@@ -198,6 +202,7 @@ class SurvVAUDataset(Dataset):
             "video_id": obj["video_id"],
             "source_video_id": obj["source_video_id"],
             "source_dataset": obj["source_dataset"],
+            "scene_environment": obj["scene_environment"],
             "frames": frames_tensor,
             "motion_frames": motion_tensor,
             "source_frames": source_tensor,
@@ -233,8 +238,6 @@ class SurvVAUDataset(Dataset):
             "occlusion_token_mask": obj.get("occlusion_token_mask"),
             "influence_targets": obj.get("influence_targets"),
             "synthesis_metadata": obj.get("synthesis_metadata", {}),
-            "reasoning_target_length": int(obj["reasoning_target_length"]),
-            "reasoning_target_source": obj["reasoning_target_source"],
             "duration_sec": float(obj["duration_sec"]),
             "fps": float(obj["fps"]),
             "num_source_frames": int(obj["num_source_frames"]),
@@ -270,6 +273,8 @@ class SurvVAUDataset(Dataset):
         timestamp_text = ", ".join(f"{value:.3f}" for value in timestamps)
         base_prompt = obj.get("prompt", "").strip()
         task_mask = obj.get("task_mask", {"event": True, "temporal": True})
+        if self.force_joint_task:
+            task_mask = {"event": True, "temporal": True}
         active_fields = []
         if task_mask.get("event", True):
             active_fields.append("event_type: LABEL")

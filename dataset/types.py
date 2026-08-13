@@ -170,6 +170,7 @@ class VideoClip:
     source_path: str = ""
     source_video_id: str = ""
     source_dataset: str = "unspecified"
+    scene_environment: str = "outdoor"
     event_type: str = ""
     event_aliases: List[str] = field(default_factory=list)
     task_mask: Dict[str, bool] = field(
@@ -193,6 +194,8 @@ class VideoClip:
             raise ValueError("Event frame bounds must lie inside the source clip")
         if not self.source_video_id:
             self.source_video_id = self.video_id
+        if self.scene_environment not in {"outdoor", "tunnel", "indoor"}:
+            raise ValueError("scene_environment must be outdoor, tunnel, or indoor")
         if self.fps <= 0.0:
             raise ValueError("fps must be positive")
         if self.duration_sec <= 0.0:
@@ -232,8 +235,6 @@ class StructuredSample:
     gt_interval: Tuple[float, float]              # (start_sec, end_sec)
     event_type: str
     event_aliases: List[str]
-    reasoning_target_length: int
-    reasoning_target_source: str
     duration_sec: float
     fps: float
     num_source_frames: int
@@ -243,6 +244,7 @@ class StructuredSample:
     conclusion_annotation: str
     answer_annotation: str
     split: str  # "sft_train" | "rl_train" | "val" | "test"
+    scene_environment: str = "outdoor"
     task_mask: Dict[str, bool] = field(
         default_factory=lambda: {"event": True, "temporal": True}
     )
@@ -261,6 +263,8 @@ class StructuredSample:
             raise ValueError("source_video_id must not be empty")
         if not self.source_dataset.strip():
             raise ValueError("source_dataset must not be empty")
+        if self.scene_environment not in {"outdoor", "tunnel", "indoor"}:
+            raise ValueError("scene_environment must be outdoor, tunnel, or indoor")
         if not self.event_type.strip():
             raise ValueError("event_type must not be empty")
         if set(self.task_mask) != {"event", "temporal"}:
@@ -274,14 +278,6 @@ class StructuredSample:
             "cue_impact",
         }:
             raise ValueError("influence_targets has an invalid field set")
-        if self.reasoning_target_length <= 0:
-            raise ValueError("reasoning_target_length must be positive")
-        if self.reasoning_target_source not in {
-            "human",
-            "human_verified",
-            "deterministic_policy",
-        }:
-            raise ValueError("reasoning_target_source is not auditable")
         if self.duration_sec <= 0.0:
             raise ValueError("duration_sec must be positive")
         if not (0.0 <= self.gt_interval[0] < self.gt_interval[1] <= self.duration_sec):

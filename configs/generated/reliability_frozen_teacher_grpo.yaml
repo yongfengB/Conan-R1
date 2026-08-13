@@ -1,0 +1,64 @@
+model:
+  base_model: Qwen/Qwen2.5-VL-3B-Instruct
+  base_model_revision: c747f21f03e7d0792c30766310bd7d8de17eeeb3
+  sft_checkpoint: checkpoints/reliability_frozen_teacher_sft
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  method_config: configs/method_config.yaml
+  policy_scope: full
+  pathway_mode: reliability
+  policy_definition: full_response_changing_policy
+training:
+  lr: 1.0e-05
+  weight_decay: 0.0
+  epochs: 5
+  group_size: 4
+  update_epochs: 2
+  clip_eps: 0.2
+  kl_coef: 0.02
+  logging_steps: 10
+  save_steps: 200
+  max_grad_norm: 1.0
+  seed: 42
+  temperature: 0.9
+  top_p: 0.95
+auxiliary_losses:
+  preserve_during_grpo: true
+  lambda_d_rl: 1.0
+  lambda_q_rl: 1.0
+  lambda_c_rl: 0.1
+  ema_update_after_optimizer_step: false
+  reliability_target: frozen_motion_teacher
+reward:
+  w_d: 0.25
+  w_e: 0.25
+  w_t: 0.25
+  w_l: 0.25
+  lambda_s: 0.5
+  lambda_fp: 0.3
+  lambda_fn: 0.3
+  compactness_base_budget: 32
+  compactness_per_task_budget: 32
+  task_masking: true
+  renormalize_active_weights: true
+  malformed_active_field_zeroes_all_active_rewards: true
+ablation:
+  allow_missing_type_influence: false
+data:
+  data_dir: data/surv_vau
+  split: rl_train
+  num_frames: 25
+  frame_size: 224
+  max_new_tokens: 384
+  require_source_pair: true
+  require_task_mask: true
+  require_native_motion_pairs: true
+  require_influence_targets: true
+output:
+  checkpoint_dir: checkpoints/reliability_frozen_teacher_grpo
+  log_file: training_log.jsonl
+experiment:
+  matrix_block: reliability_target_stage2
+  variant: reliability_frozen_teacher_grpo
+  base_config: configs/grpo_config.yaml

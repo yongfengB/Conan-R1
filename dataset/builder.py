@@ -9,12 +9,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .annotation_pipeline import (
     adjust_compactness,
-    compute_aggregated_severity,
-    derive_reasoning_target_length,
     generate_influence,
     generate_reasoning,
 )
 from .augmentation import synthesize_degradation
+from .degradation_protocol import (
+    load_degradation_protocol,
+    validate_profile_compatibility,
+)
 from .types import (
     SEVERITY_LEVELS,
     DegradationProfile,
@@ -136,7 +138,15 @@ class SurvVAUBuilder:
                     ),
                 )
             )
-        if not any(not profile.factors for profile in profiles):
+        natural_profiles = [profile for profile in profiles if profile.domain == "natural"]
+        if natural_profiles and (
+            len(profiles) != 1 or natural_profiles[0].factors
+        ):
+            raise ValueError(
+                f"{video_id}: a natural source observation must be a single "
+                "non-synthetic profile, not a clean/synthetic duplicate"
+            )
+        if not natural_profiles and not any(not profile.factors for profile in profiles):
             raise ValueError(f"{video_id}: a clean 0% profile is required")
         return profiles
 
@@ -281,6 +291,9 @@ class SurvVAUBuilder:
                         source_dataset=str(
                             ann.get("source_dataset", "unspecified")
                         ),
+                        scene_environment=str(
+                            ann.get("scene_environment", "")
+                        ),
                         event_type=event_type,
                         event_aliases=list(ann.get("event_aliases", [])),
                         task_mask=task_mask,
@@ -313,6 +326,11 @@ class SurvVAUBuilder:
             raise ValueError(
                 f"{clip.video_id}: no frozen degradation profiles are available"
             )
+        protocol = load_degradation_protocol()
+        for profile in clip.degradation_profiles:
+            validate_profile_compatibility(
+                profile, clip.scene_environment, protocol
+            )
         return clip.degradation_profiles
 
     @staticmethod
@@ -340,9 +358,7 @@ class SurvVAUBuilder:
                 degraded, profile, influence, self.model_q
             )
             # Stage 5: compactness adjustment
-            s_bar = compute_aggregated_severity(profile)
-            reasoning_adj = adjust_compactness(reasoning, s_bar, self.model_q)
-            reasoning_target_length = derive_reasoning_target_length(s_bar)
+            reasoning_adj = adjust_compactness(reasoning, self.model_q)
 
             type_annotation = "; ".join(
                 f"{name}:{sev:.1f}" for name, sev in profile.factors
@@ -352,6 +368,7 @@ class SurvVAUBuilder:
                 video_id=degraded.video_id,
                 source_video_id=degraded.source_clip.source_video_id,
                 source_dataset=degraded.source_clip.source_dataset,
+                scene_environment=degraded.source_clip.scene_environment,
                 frames=degraded.frames,
                 prompt=DEFAULT_PROMPT,
                 degradation_profile=profile.factors,
@@ -361,8 +378,6 @@ class SurvVAUBuilder:
                 event_aliases=degraded.source_clip.event_aliases,
                 task_mask=degraded.source_clip.task_mask,
                 influence_targets=degraded.source_clip.influence_targets,
-                reasoning_target_length=reasoning_target_length,
-                reasoning_target_source="deterministic_policy",
                 duration_sec=degraded.source_clip.duration_sec,
                 fps=degraded.source_clip.fps,
                 num_source_frames=len(degraded.source_clip.frames),
@@ -455,10 +470,51 @@ class SurvVAUBuilder:
             )
         return splits
 
+    def assign_source_splits(
+        self,
+        clips: List[VideoClip],
+        seed: Optional[int] = None,
+    ) -> Dict[str, str]:
+        """Freeze source assignments before constructing any profile variant."""
+        split_seed = self.seed if seed is None else seed
+        by_source = defaultdict(list)
+        for clip in clips:
+            by_source[clip.source_video_id].append(
+                {
+                    "source_dataset": clip.source_dataset,
+                    "event_type": clip.event_type,
+                }
+            )
+        outer = stratified_partition(
+            by_source,
+            fractions=(0.70, 0.15, 0.15),
+            names=("train", "val", "test"),
+            seed=split_seed,
+        )
+        training = {
+            source_id: by_source[source_id]
+            for source_id, split in outer.items()
+            if split == "train"
+        }
+        inner = stratified_partition(
+            training,
+            fractions=(0.30, 0.70),
+            names=("sft_train", "rl_train"),
+            seed=split_seed + 1,
+        )
+        return {
+            source_id: inner[source_id] if split == "train" else split
+            for source_id, split in outer.items()
+        }
+
     def validate_sample(self, sample: StructuredSample) -> bool:
         """Rule-based quality validation."""
         try:
-            # Re-run __post_init__ checks via a dummy re-assignment
+            from model.parser import (
+                extract_degradation_profile,
+                parse_answer_fields,
+            )
+
             if sample.difficulty_level not in SEVERITY_LEVELS:
                 return False
             if sample.gt_interval[0] >= sample.gt_interval[1]:
@@ -472,6 +528,23 @@ class SurvVAUBuilder:
             ]:
                 if not block or not block.strip():
                     return False
+            if extract_degradation_profile(sample.type_annotation) != [
+                (name, float(severity))
+                for name, severity in sample.degradation_profile
+            ]:
+                return False
+            answer = parse_answer_fields(
+                sample.answer_annotation,
+                event_active=bool(sample.task_mask["event"]),
+                temporal_active=bool(sample.task_mask["temporal"]),
+                duration_sec=sample.duration_sec,
+            )
+            if answer is None:
+                return False
+            if sample.task_mask["event"] and answer.event_type != sample.event_type:
+                return False
+            if sample.task_mask["temporal"] and answer.interval != tuple(sample.gt_interval):
+                return False
             return True
         except Exception:
             return False
@@ -487,10 +560,19 @@ class SurvVAUBuilder:
     ) -> Dict[str, List[StructuredSample]]:
         """Run the complete five-stage pipeline and return split samples."""
         clips = self.collect_and_segment(source_dirs, annotation_file)
-        all_samples: List[StructuredSample] = []
+        source_split = self.assign_source_splits(clips)
+        splits: Dict[str, List[StructuredSample]] = {
+            "sft_train": [], "rl_train": [], "val": [], "test": []
+        }
         for clip in clips:
             profiles = self._build_profiles(clip)
             for profile in profiles:
+                assigned_split = source_split[clip.source_video_id]
+                if (
+                    profile.domain in {"synthetic_unseen", "natural"}
+                    and assigned_split != "test"
+                ):
+                    continue
                 degraded = synthesize_degradation(clip, profile, seed=self.seed)
                 degraded.video_id = f"{clip.video_id}__{self._profile_suffix(profile)}"
                 sample = self._annotate(degraded, profile)
@@ -499,6 +581,7 @@ class SurvVAUBuilder:
                 if not self.validate_sample(sample):
                     logger.warning("Sample %s failed validation, skipping.", sample.video_id)
                     continue
-                all_samples.append(sample)
+                sample.split = assigned_split
+                splits[assigned_split].append(sample)
 
-        return self.split_dataset(all_samples)
+        return splits

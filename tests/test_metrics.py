@@ -53,7 +53,14 @@ def test_standard_text_metrics_exact_match():
     references = ["rear end collision"]
     assert compute_corpus_bleu(hypotheses, references, 1) == pytest.approx(1.0)
     assert compute_corpus_bleu(hypotheses, references, 4) == pytest.approx(1.0)
-    assert compute_meteor(hypotheses[0], references[0]) == pytest.approx(1.0)
+    from nltk.translate.meteor_score import meteor_score
+
+    expected_meteor = meteor_score(
+        [references[0].split()], hypotheses[0].split()
+    )
+    assert compute_meteor(hypotheses[0], references[0]) == pytest.approx(
+        expected_meteor
+    )
     assert compute_rouge_l(hypotheses[0], references[0]) == pytest.approx(1.0)
 
 

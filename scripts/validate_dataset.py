@@ -6,14 +6,27 @@ import argparse
 import hashlib
 import json
 import math
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+from dataset.degradation_protocol import (
+    degradation_combination_label,
+    load_degradation_protocol,
+    validate_profile_compatibility,
+)
+from dataset.types import DegradationProfile
+from model.parser import extract_degradation_profile, parse_answer_fields
 
 
 REQUIRED_FIELDS = {
     "video_id",
     "source_video_id",
     "source_dataset",
+    "scene_environment",
     "prompt",
     "degradation_profile",
     "degradation_level",
@@ -21,6 +34,7 @@ REQUIRED_FIELDS = {
     "degradation_combination",
     "synthesis_applied",
     "degradation_protocol",
+    "synthesis_metadata",
     "gt_interval",
     "event_type",
     "event_aliases",
@@ -30,8 +44,6 @@ REQUIRED_FIELDS = {
     "motion_pair_indices",
     "motion_elapsed_sec",
     "influence_targets",
-    "reasoning_target_length",
-    "reasoning_target_source",
     "duration_sec",
     "fps",
     "num_source_frames",
@@ -83,6 +95,7 @@ def main() -> None:
             "split_manifest.json is required to audit split provenance."
         )
     splits = json.loads(split_path.read_text(encoding="utf-8"))
+    degradation_protocol = load_degradation_protocol()
     records = []
     errors = []
     with open(annotations_path, encoding="utf-8") as handle:
@@ -147,12 +160,24 @@ def main() -> None:
                 errors.append(
                     f"line {line_number}: synthetic domain has inconsistent protocol fields"
                 )
+            synthesis_metadata = record["synthesis_metadata"]
+            if not isinstance(synthesis_metadata, dict):
+                errors.append(f"line {line_number}: synthesis_metadata must be an object")
+            else:
+                expected_metadata_protocol = (
+                    degradation_protocol["protocol_id"]
+                    if synthetic
+                    else "source_observation"
+                )
+                if (
+                    synthesis_metadata.get("protocol") != expected_metadata_protocol
+                    or bool(synthesis_metadata.get("synthesis_applied")) != synthetic
+                ):
+                    errors.append(
+                        f"line {line_number}: inconsistent synthesis_metadata protocol"
+                    )
             if not str(record["event_type"]).strip():
                 errors.append(f"line {line_number}: empty event_type")
-            if int(record["reasoning_target_length"]) <= 0:
-                errors.append(
-                    f"line {line_number}: reasoning_target_length must be positive"
-                )
             if not isinstance(record["event_aliases"], list):
                 errors.append(f"line {line_number}: event_aliases must be a list")
             task_mask = record["task_mask"]
@@ -162,6 +187,8 @@ def main() -> None:
                 or not any(bool(value) for value in task_mask.values())
             ):
                 errors.append(f"line {line_number}: invalid task_mask")
+            if record["scene_environment"] not in {"outdoor", "tunnel", "indoor"}:
+                errors.append(f"line {line_number}: invalid scene_environment")
             anchors = record["anchor_indices"]
             motion_pairs = record["motion_pair_indices"]
             elapsed = record["motion_elapsed_sec"]
@@ -205,6 +232,7 @@ def main() -> None:
                     f"line {line_number}: degradation_profile must be a list"
                 )
             else:
+                factor_names = []
                 for factor in profile:
                     if (
                         not isinstance(factor, (list, tuple))
@@ -216,6 +244,93 @@ def main() -> None:
                             f"line {line_number}: invalid degradation factor"
                         )
                         break
+                    factor_names.append(str(factor[0]))
+                if len(factor_names) != len(set(factor_names)):
+                    errors.append(
+                        f"line {line_number}: duplicate degradation operator"
+                    )
+                normalized_profile = [
+                    (str(name), float(severity)) for name, severity in profile
+                ]
+                if extract_degradation_profile(record["type_annotation"]) != normalized_profile:
+                    errors.append(
+                        f"line {line_number}: TYPE does not match degradation_profile"
+                    )
+                try:
+                    parsed_profile = DegradationProfile(
+                            factors=normalized_profile,
+                            difficulty_level=float(record["degradation_level"]),
+                            domain=str(record["degradation_domain"]),
+                        )
+                    validate_profile_compatibility(
+                        parsed_profile,
+                        str(record["scene_environment"]),
+                        degradation_protocol,
+                    )
+                    expected_combination = degradation_combination_label(
+                        parsed_profile, degradation_protocol
+                    )
+                    if record["degradation_combination"] != expected_combination:
+                        raise ValueError(
+                            "degradation_combination does not match the profile"
+                        )
+                    if isinstance(synthesis_metadata, dict):
+                        logged_order = synthesis_metadata.get("operator_order", [])
+                        expected_order = sorted(
+                            factor_names,
+                            key=degradation_protocol["operator_order"].index,
+                        )
+                        if logged_order != expected_order:
+                            raise ValueError(
+                                "synthesis operator_order does not match the profile"
+                            )
+                        active = synthesis_metadata.get("active_operators", [])
+                        active_profile = [
+                            (item.get("name"), float(item.get("severity_fraction", -1.0)))
+                            for item in active
+                        ] if isinstance(active, list) else []
+                        expected_profile = sorted(
+                            normalized_profile,
+                            key=lambda item: degradation_protocol["operator_order"].index(item[0]),
+                        )
+                        if active_profile != expected_profile:
+                            raise ValueError(
+                                "synthesis active_operators do not match the profile"
+                            )
+                        for item in active:
+                            operator = degradation_protocol["operators"][item["name"]]
+                            if item.get("maximum_magnitude") != operator["maximum_magnitude"]:
+                                raise ValueError(
+                                    f"{item['name']} maximum_magnitude differs from protocol"
+                                )
+                            if item.get("temporal_model") != operator["temporal_model"]:
+                                raise ValueError(
+                                    f"{item['name']} temporal_model differs from protocol"
+                                )
+                except ValueError as error:
+                    errors.append(f"line {line_number}: {error}")
+            answer = (
+                parse_answer_fields(
+                    record["answer_annotation"],
+                    event_active=bool(task_mask.get("event", False)),
+                    temporal_active=bool(task_mask.get("temporal", False)),
+                    duration_sec=duration,
+                )
+                if isinstance(task_mask, dict)
+                else None
+            )
+            if answer is None:
+                errors.append(f"line {line_number}: invalid ANSWER grammar")
+            elif (
+                bool(task_mask["event"])
+                and answer.event_type != record["event_type"]
+            ) or (
+                bool(task_mask["temporal"])
+                and list(answer.interval) != [float(value) for value in interval]
+            ):
+                errors.append(
+                    f"line {line_number}: ANSWER does not match benchmark targets"
+                )
             if video_id not in splits:
                 errors.append(f"line {line_number}: missing split assignment")
             records.append(record)

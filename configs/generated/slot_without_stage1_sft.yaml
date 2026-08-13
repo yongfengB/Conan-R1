@@ -1,0 +1,60 @@
+model:
+  base_model: Qwen/Qwen2.5-VL-3B-Instruct
+  base_model_revision: c747f21f03e7d0792c30766310bd7d8de17eeeb3
+  init_checkpoint: null
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  method_config: configs/method_config.yaml
+  policy_scope: full
+  trainable_policy_scope:
+  - motion_encoder
+  - degradation_heads
+  - reliability_heads
+  - fusion
+  - temporal_adapter
+  - projector
+  - consistency_readouts
+  - lora
+training:
+  lr: 5.0e-05
+  batch_size: 1
+  gradient_accumulation_steps: 4
+  epochs: 10
+  warmup_steps: 100
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  save_steps: 500
+  logging_steps: 50
+  seed: 42
+  enabled_blocks:
+  - TYPE
+  - INFLUENCE
+  - REASONING
+  - CONCLUSION
+  - ANSWER
+auxiliary_losses:
+  lambda_d: 1.0
+  lambda_q_sft: 1.0
+  lambda_c_sft: 0.0
+  reliability_target: frozen_appearance_teacher_plus_ema_motion_teacher
+  stop_gradient_targets: true
+  occlusion_mask_adjustment: true
+  ema_update_after_optimizer_step: true
+data:
+  data_dir: data/surv_vau
+  splits:
+  - sft_train
+  num_frames: 25
+  frame_size: 224
+  max_new_tokens: 384
+  require_source_pair: true
+  require_task_mask: true
+  require_native_motion_pairs: true
+  require_influence_targets: true
+output:
+  checkpoint_dir: checkpoints/slot_without_stage1_sft
+experiment:
+  matrix_block: diagnostic_slot_controls
+  variant: slot_without_stage1_sft
+  base_config: configs/sft_config.yaml

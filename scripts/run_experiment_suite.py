@@ -50,11 +50,17 @@ def main() -> None:
             Path("configs/generated"),
             overwrite=True,
         )
-        for variant in matrix["stage2_reward"]["variants"]:
-            commands.append(
-                "torchrun --standalone --nproc_per_node=4 "
-                f"scripts/train_grpo.py --config configs/generated/{variant['name']}.yaml"
-            )
+        for block_name in matrix["materialized_blocks"]:
+            block = matrix[block_name]
+            for variant in block["variants"]:
+                if not variant.get("materialize", True):
+                    continue
+                trainer = variant.get("trainer", block["trainer"])
+                commands.append(
+                    "torchrun --standalone --nproc_per_node=4 "
+                    f"scripts/{trainer}.py --config "
+                    f"configs/generated/{variant['name']}.yaml"
+                )
         commands.append(matrix["reliability_field_interventions"]["command"])
 
     report = {

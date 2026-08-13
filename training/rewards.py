@@ -9,7 +9,7 @@ All component rewards are bounded to ``[0, 1]`` before aggregation:
 ``r_t``
     Temporal intersection over union.
 ``r_l``
-    Agreement with an explicit target effective reasoning length.
+    One-sided penalty for exceeding a task-dependent reasoning budget.
 
 The functions in this module are deliberately independent of a language model
 judge.  This prevents the student from being rewarded by the same model family
@@ -209,28 +209,24 @@ def compute_rt(
 
 def compute_rl(
     pred_reasoning: str,
-    target_length: int,
-    tolerance: float = 0.20,
+    event_active: bool = True,
+    temporal_active: bool = True,
+    base_budget: int = 32,
+    per_task_budget: int = 32,
 ) -> float:
-    """Score effective reasoning length against an explicit target.
-
-    A tolerance band prevents the reward from enforcing an exact token count.
-    ``target_length`` is the deterministic severity-conditioned target stored
-    in the dataset manifest; teacher text is never accepted as the target.
-    """
-    if isinstance(target_length, bool) or not isinstance(target_length, int):
-        raise TypeError("target_length must be an integer policy target.")
-    target = target_length
-    if target <= 0:
-        return 1.0 if effective_length(pred_reasoning) == 0 else 0.0
-
-    predicted = effective_length(pred_reasoning)
-    allowed_error = max(1.0, tolerance * target)
-    error = abs(predicted - target)
-    if error <= allowed_error:
-        return 1.0
-    decay_range = max(float(target) - allowed_error, 1.0)
-    return _clip01(1.0 - (error - allowed_error) / decay_range)
+    """Apply a one-sided compactness budget without a severity-length prior."""
+    if isinstance(base_budget, bool) or not isinstance(base_budget, int):
+        raise TypeError("base_budget must be an integer.")
+    if isinstance(per_task_budget, bool) or not isinstance(per_task_budget, int):
+        raise TypeError("per_task_budget must be an integer.")
+    if base_budget <= 0 or per_task_budget < 0:
+        raise ValueError("Compactness budgets must be non-negative and non-zero.")
+    active_tasks = int(bool(event_active)) + int(bool(temporal_active))
+    if active_tasks < 1:
+        raise ValueError("At least one answer task must be active.")
+    budget = base_budget + per_task_budget * active_tasks
+    excess = max(0, effective_length(pred_reasoning) - budget)
+    return float(math.exp(-excess / budget))
 
 
 def validate_reward_weights(weights: Mapping[str, float]) -> None:

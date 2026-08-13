@@ -47,23 +47,23 @@ def test_property3_rt_no_overlap():
 
 
 # ---------------------------------------------------------------------------
-# Property 4: rl ∈ [0, 1] for any reasoning text pair
+# Property 4: rl ∈ [0, 1] for any reasoning text and valid task mask
 # ---------------------------------------------------------------------------
 
 @given(
     pred=st.text(min_size=0, max_size=200),
-    gt=st.text(min_size=1, max_size=200),
+    event_active=st.booleans(),
 )
 @settings(max_examples=200)
-def test_property4_rl_bounded(pred, gt):
-    """Property 4: rl ∈ [0, 1] for any reasoning text pair."""
-    rl = compute_rl(pred, gt)
+def test_property4_rl_bounded(pred, event_active):
+    """Property 4: rl ∈ [0, 1] for any reasoning text and valid task mask."""
+    rl = compute_rl(pred, event_active=event_active, temporal_active=not event_active)
     assert 0.0 <= rl <= 1.0
 
 
 def test_property4_rl_identical():
     text = "vehicle braked suddenly causing rear-end collision"
-    assert compute_rl(text, text) == pytest.approx(1.0)
+    assert compute_rl(text) == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------

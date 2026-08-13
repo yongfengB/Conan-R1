@@ -21,6 +21,14 @@ class StructuredOutput:
     raw_text: str
 
 
+@dataclass(frozen=True)
+class AnswerFields:
+    """Exactly the benchmark fields activated by a sample task mask."""
+
+    event_type: Optional[str]
+    interval: Optional[Tuple[float, float]]
+
+
 # ---------------------------------------------------------------------------
 # Block definitions (ordered)
 # ---------------------------------------------------------------------------
@@ -159,6 +167,7 @@ def extract_degradation_profile(
     if not entries or any(entry.lower() == "none" for entry in entries):
         return None
     profile: List[Tuple[str, float]] = []
+    seen_factors = set()
     for entry in entries:
         if entry.count(":") != 1:
             return None
@@ -170,6 +179,9 @@ def extract_degradation_profile(
             return None
         if not factor or not math.isfinite(severity) or not 0.0 <= severity <= 1.0:
             return None
+        if factor in seen_factors:
+            return None
+        seen_factors.add(factor)
         profile.append((factor, severity))
     return profile
 
@@ -216,3 +228,62 @@ def extract_temporal_interval(
     if len(unique) != 1:
         return None
     return next(iter(unique.values()))
+
+
+_EVENT_FIELD = r"event_type\s*:\s*([^;\[\]\r\n]+?)"
+_INTERVAL_FIELD = (
+    r"interval\s*:\s*\[\s*(\d+(?:\.\d+)?)\s*,\s*"
+    r"(\d+(?:\.\d+)?)\s*\]"
+)
+
+
+def parse_answer_fields(
+    answer_text: str,
+    *,
+    event_active: bool,
+    temporal_active: bool,
+    duration_sec: Optional[float] = None,
+) -> Optional[AnswerFields]:
+    """Parse the task-conditioned, closed ``<ANSWER>`` grammar.
+
+    Only fields activated by the manifest task mask may be emitted.  This is
+    deliberately stricter than the compatibility extractors above: it rejects
+    prose, aliases for field names, repeated fields and answers that disclose
+    an inactive target.  Temporal endpoints are expressed in clip seconds.
+    """
+    if not event_active and not temporal_active:
+        raise ValueError("At least one ANSWER field must be active.")
+    if duration_sec is not None and (
+        not math.isfinite(float(duration_sec)) or float(duration_sec) <= 0.0
+    ):
+        raise ValueError("duration_sec must be finite and positive.")
+
+    if event_active and temporal_active:
+        pattern = rf"{_EVENT_FIELD}\s*;\s*{_INTERVAL_FIELD}"
+    elif event_active:
+        pattern = _EVENT_FIELD
+    else:
+        pattern = _INTERVAL_FIELD
+    match = re.fullmatch(pattern, answer_text.strip(), re.IGNORECASE)
+    if match is None:
+        return None
+
+    if event_active:
+        label = " ".join(match.group(1).split())
+        if not label:
+            return None
+        interval_groups = (2, 3)
+    else:
+        label = None
+        interval_groups = (1, 2)
+
+    interval = None
+    if temporal_active:
+        start = float(match.group(interval_groups[0]))
+        end = float(match.group(interval_groups[1]))
+        if not (math.isfinite(start) and math.isfinite(end) and 0.0 <= start < end):
+            return None
+        if duration_sec is not None and end > float(duration_sec) + 1e-6:
+            return None
+        interval = (start, end)
+    return AnswerFields(event_type=label, interval=interval)

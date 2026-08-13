@@ -22,7 +22,10 @@ from .types import (
     SpatialAnnotationError,
     VideoClip,
 )
-from .degradation_protocol import load_degradation_protocol
+from .degradation_protocol import (
+    load_degradation_protocol,
+    validate_profile_compatibility,
+)
 
 
 BBox = Tuple[float, float, float, float]
@@ -75,13 +78,24 @@ def _select_vehicle_track(clip: VideoClip) -> ObjectTrack:
     vehicles = [
         track
         for track in clip.object_tracks
-        if track.category.lower() in {"vehicle", "car", "truck", "bus", "van", "motorcycle"}
+        if track.event_relevant
+        and track.category.lower()
+        in {"vehicle", "car", "truck", "bus", "van", "motorcycle"}
     ]
     if not vehicles:
         raise SpatialAnnotationError(
             f"{clip.video_id}: vehicle_mask requires at least one vehicle trajectory"
         )
     start, end = _event_frame_range(clip)
+    vehicles = [
+        track
+        for track in vehicles
+        if any(track.box_at(index) is not None for index in range(start, end + 1))
+    ]
+    if not vehicles:
+        raise SpatialAnnotationError(
+            f"{clip.video_id}: no event-relevant vehicle track overlaps the event"
+        )
 
     def score(track: ObjectTrack) -> Tuple[int, int, float]:
         visible = [
@@ -102,14 +116,23 @@ def _select_interaction_source(
 ) -> Tuple[Optional[InteractionRegion], Optional[Tuple[ObjectTrack, ObjectTrack]]]:
     if clip.interaction_regions:
         start, end = _event_frame_range(clip)
+        visible_regions = [
+            item
+            for item in clip.interaction_regions
+            if any(
+                item.box_at(frame_index) is not None
+                for frame_index in range(start, end + 1)
+            )
+        ]
         region = max(
-            clip.interaction_regions,
+            visible_regions,
             key=lambda item: sum(
                 item.box_at(frame_index) is not None
                 for frame_index in range(start, end + 1)
             ),
-        )
-        return region, None
+        ) if visible_regions else None
+        if region is not None:
+            return region, None
 
     tracks = [track for track in clip.object_tracks if track.event_relevant]
     if len(tracks) < 2:
@@ -272,13 +295,14 @@ def apply_defocus_blur(frame: np.ndarray, severity: float) -> np.ndarray:
 def apply_compression_artifact(frame: np.ndarray, severity: float) -> np.ndarray:
     """Held-out test operator: JPEG quality decreases from 100 to a floor of 20."""
     quality = max(20, int(round(100.0 - severity * 80.0)))
-    ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    ok, encoded = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
     if not ok:
         raise RuntimeError("JPEG encoding failed while synthesizing compression artifacts")
     decoded = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
     if decoded is None:
         raise RuntimeError("JPEG decoding failed while synthesizing compression artifacts")
-    return decoded
+    return cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB)
 
 
 def apply_occlusion(
@@ -443,6 +467,7 @@ def synthesize_degradation(
         raise ValueError("Degradation synthesis requires H x W x 3 RGB frames")
     if any(frame.shape != first_shape for frame in clip.frames):
         raise ValueError("All source frames must have an identical shape")
+    validate_profile_compatibility(profile, clip.scene_environment, _PROTOCOL)
     resolved_seed = _stable_seed(clip, profile, seed)
     context = _TemporalContext(clip=clip, profile=profile, seed=resolved_seed)
     degraded_frames: List[np.ndarray] = []

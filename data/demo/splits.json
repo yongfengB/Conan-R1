@@ -1,6 +1,5 @@
 {
   "demo_source_000__clean": "test",
-  "demo_source_000__natural": "test",
   "demo_source_000__seen20": "test",
   "demo_source_000__seen40": "test",
   "demo_source_000__seen80": "test",
@@ -8,7 +7,6 @@
   "demo_source_001__clean": "rl_train",
   "demo_source_002__clean": "val",
   "demo_source_003__clean": "test",
-  "demo_source_003__natural": "test",
   "demo_source_003__seen20": "test",
   "demo_source_003__seen40": "test",
   "demo_source_003__seen80": "test",
@@ -18,7 +16,6 @@
   "demo_source_006__clean": "rl_train",
   "demo_source_007__clean": "val",
   "demo_source_008__clean": "test",
-  "demo_source_008__natural": "test",
   "demo_source_008__seen20": "test",
   "demo_source_008__seen40": "test",
   "demo_source_008__seen80": "test",

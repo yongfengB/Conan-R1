@@ -35,8 +35,9 @@ _CONCLUSION_PROMPT = (
 )
 
 _COMPACTNESS_PROMPT = (
-    "Rewrite the following reasoning chain to be {length_instruction}. "
-    "Preserve all key evidence-to-judgment steps but {action}.\n\nReasoning:\n{reasoning}"
+    "Rewrite the following reasoning chain concisely. Preserve every observable "
+    "evidence-to-judgment step, remove repetition, and do not add unsupported "
+    "details.\n\nReasoning:\n{reasoning}"
 )
 
 
@@ -116,46 +117,8 @@ def compute_aggregated_difficulty(profile: DegradationProfile) -> float:
 
 def adjust_compactness(
     reasoning: str,
-    s_bar: float,
     model_q: Any,
 ) -> str:
-    """Adjust reasoning length based on aggregated degradation severity.
-
-    Higher s_bar → more detailed reasoning.
-    Lower s_bar  → more concise reasoning.
-
-    Args:
-        reasoning: Original reasoning annotation.
-        s_bar: Aggregated degradation-severity score in [0, 1].
-        model_q: Annotator model.
-
-    Returns:
-        Compactness-adjusted reasoning string.
-    """
-    if s_bar >= 0.6:
-        length_instruction = "more detailed and thorough"
-        action = "add compensatory reasoning steps for degraded evidence"
-    elif s_bar >= 0.3:
-        length_instruction = "moderately detailed"
-        action = "keep all key evidence-to-judgment steps without excessive elaboration"
-    else:
-        length_instruction = "concise"
-        action = "remove redundant steps and keep only the essential explanation"
-
-    prompt = _COMPACTNESS_PROMPT.format(
-        length_instruction=length_instruction,
-        action=action,
-        reasoning=reasoning,
-    )
+    """Remove repetition without conditioning annotation length on severity."""
+    prompt = _COMPACTNESS_PROMPT.format(reasoning=reasoning)
     return model_q.generate([], prompt)
-
-
-def derive_reasoning_target_length(s_bar: float) -> int:
-    """Map severity to an explicit, auditable effective-token target.
-
-    This deterministic policy is independent of the annotator's realized
-    sentence length.  It is a training target, not evidence that longer
-    reasoning is intrinsically better.
-    """
-    bounded = max(0.0, min(1.0, float(s_bar)))
-    return int(round(32 + 96 * bounded))

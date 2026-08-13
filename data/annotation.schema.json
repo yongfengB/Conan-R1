@@ -5,13 +5,12 @@
   "type": "object",
   "additionalProperties": true,
   "required": [
-    "video_id", "source_video_id", "source_dataset", "prompt",
+    "video_id", "source_video_id", "source_dataset", "scene_environment", "prompt",
     "degradation_profile", "degradation_level", "degradation_domain",
-    "degradation_combination", "synthesis_applied", "degradation_protocol",
+    "degradation_combination", "synthesis_applied", "degradation_protocol", "synthesis_metadata",
     "gt_interval", "event_type", "event_aliases", "task_mask",
     "source_video_file", "anchor_indices", "motion_pair_indices",
-    "motion_elapsed_sec", "influence_targets", "reasoning_target_length",
-    "reasoning_target_source", "duration_sec", "fps", "num_source_frames",
+    "motion_elapsed_sec", "influence_targets", "duration_sec", "fps", "num_source_frames",
     "type_annotation", "influence_annotation", "reasoning_annotation",
     "conclusion_annotation", "answer_annotation"
   ],
@@ -19,6 +18,7 @@
     "video_id": {"type": "string", "minLength": 1},
     "source_video_id": {"type": "string", "minLength": 1},
     "source_dataset": {"type": "string", "minLength": 1},
+    "scene_environment": {"enum": ["outdoor", "tunnel", "indoor"]},
     "prompt": {"type": "string", "minLength": 1},
     "degradation_profile": {
       "type": "array",
@@ -34,6 +34,7 @@
     "degradation_combination": {"type": "string", "minLength": 1},
     "synthesis_applied": {"type": "boolean"},
     "degradation_protocol": {"type": "string", "minLength": 1},
+    "synthesis_metadata": {"type": "object"},
     "gt_interval": {
       "type": "array",
       "prefixItems": [{"type": "number", "minimum": 0}, {"type": "number", "exclusiveMinimum": 0}],
@@ -91,8 +92,6 @@
     "occlusion_token_mask": {
       "type": ["array", "null"]
     },
-    "reasoning_target_length": {"type": "integer", "minimum": 1},
-    "reasoning_target_source": {"enum": ["human", "human_verified", "deterministic_policy"]},
     "duration_sec": {"type": "number", "exclusiveMinimum": 0},
     "fps": {"type": "number", "exclusiveMinimum": 0},
     "num_source_frames": {"type": "integer", "minimum": 2},

@@ -39,10 +39,13 @@ class ReliabilityPathwayConfig:
     max_spatial_tokens: int = 256
     q_min: float = 0.05
     reliability_prior_scale: float = 1.0
-    tau_appearance: float = 8.0
-    tau_motion: float = 8.0
+    tau_appearance: float = 0.25
+    tau_motion: float = 0.25
     ema_decay: float = 0.999
     dropout: float = 0.0
+    use_reliability_fusion: bool = True
+    use_event_aware_pooling: bool = True
+    use_temporal_reliability: bool = True
 
     def __post_init__(self) -> None:
         if min(
@@ -115,11 +118,11 @@ def source_relative_target(
     temperature: float,
     occlusion_mask: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    """Construct the detached source-relative retention target.
+    """Construct the detached, dimension-free retention proxy.
 
-    The target is the exponential of the squared distance between layer-
-    normalized teacher features.  A logged occlusion mask sets local retention
-    to zero on the affected token grid.
+    The proxy exponentiates half the angular discrepancy between aligned
+    layer-normalized teacher features.  A logged occlusion mask sets local
+    retention to zero on the affected token grid.
     """
     if degraded_teacher.shape != source_teacher.shape:
         raise ValueError("Source and degraded teacher features must be aligned.")
@@ -130,7 +133,9 @@ def source_relative_target(
     with torch.no_grad():
         degraded = F.layer_norm(degraded_teacher, (degraded_teacher.shape[-1],))
         source = F.layer_norm(source_teacher, (source_teacher.shape[-1],))
-        target = torch.exp(-torch.square(degraded - source).sum(-1) / temperature)
+        similarity = F.cosine_similarity(degraded, source, dim=-1, eps=1e-8)
+        discrepancy = 0.5 * (1.0 - similarity.clamp(-1.0, 1.0))
+        target = torch.exp(-discrepancy / temperature)
         if occlusion_mask is not None:
             mask = occlusion_mask.to(device=target.device, dtype=target.dtype)
             if mask.shape != target.shape:
@@ -340,24 +345,49 @@ class ReliabilityAwarePathway(nn.Module):
             reliability_intervention,
             seed=intervention_seed,
         )
-        gates = torch.softmax(
-            self.modality_gate(
-                torch.cat((joint, q_appearance[..., None], q_motion[..., None]), dim=-1)
-            ),
-            dim=-1,
-        )
-        fused = self.fusion_norm(
-            gates[..., 0, None]
-            * q_appearance[..., None]
-            * self.appearance_projection(appearance)
-            + gates[..., 1, None]
-            * q_motion[..., None]
-            * self.motion_projection(motion)
-            + self.reliability_projection(
-                torch.stack((q_appearance, q_motion), dim=-1)
+        if self.config.use_reliability_fusion:
+            gates = torch.softmax(
+                self.modality_gate(
+                    torch.cat(
+                        (joint, q_appearance[..., None], q_motion[..., None]),
+                        dim=-1,
+                    )
+                ),
+                dim=-1,
             )
-        )
-        event_weights = torch.softmax(self.event_score(fused).squeeze(-1), dim=-1)
+            fused = self.fusion_norm(
+                gates[..., 0, None]
+                * q_appearance[..., None]
+                * self.appearance_projection(appearance)
+                + gates[..., 1, None]
+                * q_motion[..., None]
+                * self.motion_projection(motion)
+                + self.reliability_projection(
+                    torch.stack((q_appearance, q_motion), dim=-1)
+                )
+            )
+        else:
+            gates = torch.full(
+                (*appearance.shape[:-1], 2),
+                0.5,
+                dtype=appearance.dtype,
+                device=appearance.device,
+            )
+            fused = self.fusion_norm(
+                0.5 * self.appearance_projection(appearance)
+                + 0.5 * self.motion_projection(motion)
+            )
+        if self.config.use_event_aware_pooling:
+            event_weights = torch.softmax(
+                self.event_score(fused).squeeze(-1), dim=-1
+            )
+        else:
+            event_weights = torch.full(
+                (batch, anchors, spatial),
+                1.0 / spatial,
+                dtype=fused.dtype,
+                device=fused.device,
+            )
         content = torch.sum(event_weights[..., None] * fused, dim=2)
         frame_reliability = torch.sum(
             event_weights
@@ -373,9 +403,10 @@ class ReliabilityAwarePathway(nn.Module):
         )
         time_delta = timestamps[:, :, None] - timestamps[:, None, :]
         scores = scores + self.timestamp_bias(time_delta[..., None]).squeeze(-1)
-        scores = scores + self.config.reliability_prior_scale * torch.log(
-            frame_reliability.clamp(self.config.q_min, 1.0)
-        )[:, None, :]
+        if self.config.use_temporal_reliability:
+            scores = scores + self.config.reliability_prior_scale * torch.log(
+                frame_reliability.clamp(self.config.q_min, 1.0)
+            )[:, None, :]
         temporal_attention = torch.softmax(scores, dim=-1)
         temporal = content + torch.einsum("btu,bud->btd", temporal_attention, value)
 

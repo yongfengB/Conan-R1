@@ -6,6 +6,7 @@ model:
   lora_alpha: 32
   lora_dropout: 0.05
   method_config: "configs/method_config.yaml"
+  policy_scope: full
   trainable_policy_scope:
     - motion_encoder
     - degradation_heads

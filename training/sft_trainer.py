@@ -60,6 +60,9 @@ class SFTConfig:
     lambda_q_sft: float = 1.0
     lambda_c_sft: float = 0.1
     policy_scope: str = "full"
+    reliability_target: str = "ema"
+    occlusion_mask_adjustment: bool = True
+    ema_update_after_optimizer_step: bool = True
 
     @classmethod
     def from_yaml(cls, path: str) -> "SFTConfig":
@@ -98,6 +101,19 @@ class SFTConfig:
             value > 0.0 for value in (obj.lambda_d, obj.lambda_q_sft, obj.lambda_c_sft)
         ):
             raise ValueError("LoRA-only SFT cannot enable reliability auxiliary losses.")
+        target_aliases = {
+            "frozen_appearance_teacher_plus_ema_motion_teacher": "ema",
+            "ema": "ema",
+            "online_motion_target": "online",
+            "online": "online",
+            "frozen_motion_teacher": "frozen_initial",
+            "frozen_initial": "frozen_initial",
+        }
+        if obj.reliability_target not in target_aliases:
+            raise ValueError("Unsupported reliability_target.")
+        obj.reliability_target = target_aliases[obj.reliability_target]
+        if obj.reliability_target == "frozen_initial" and obj.ema_update_after_optimizer_step:
+            raise ValueError("A frozen motion teacher cannot receive EMA updates.")
         enabled = {str(block).upper() for block in obj.enabled_blocks}
         canonical = [
             block
@@ -259,6 +275,8 @@ class SFTTrainer:
                 occlusion_token_mask=mask,
                 timestamps=timestamps,
                 compute_consistency=use_consistency,
+                motion_target_mode=self.config.reliability_target,
+                occlusion_mask_adjustment=self.config.occlusion_mask_adjustment,
             )
             losses.append(
                 stage1_loss(
@@ -349,7 +367,10 @@ class SFTTrainer:
                 require_finite(gradient_norm, "SFT gradient norm")
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
-                if self.model.motion_teacher is not None:
+                if (
+                    self.model.motion_teacher is not None
+                    and self.config.ema_update_after_optimizer_step
+                ):
                     self.model.update_motion_teacher()
                 self.scheduler.step()
                 self.optimizer.zero_grad(set_to_none=True)

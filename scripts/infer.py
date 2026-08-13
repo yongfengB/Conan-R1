@@ -55,9 +55,9 @@ def main() -> None:
         from dataset.dataset import structured_output_instruction
         from dataset.types import VideoLoadError
         from model.conan_r1 import ConanR1Model, LoRAConfig
-        from scripts._common import load_config, load_core_protocol
-        from scripts.train_sft import build_reliability_config
-        from model.parser import parse_structured_output, extract_temporal_interval
+        from scripts._common import load_core_protocol
+        from model.parser import parse_answer_fields, parse_structured_output
+        from model.reliability_pathway import ReliabilityPathwayConfig
         from scripts._common import resolve_device
     except ImportError as e:
         print(f"ERROR: Import failed — {e}", file=sys.stderr)
@@ -75,20 +75,18 @@ def main() -> None:
 
     # Load model
     logger.info("Loading model from checkpoint: %s", args.checkpoint)
-    raw_config = load_config("configs/grpo_config.yaml")
     core_protocol = load_core_protocol(Path(args.checkpoint))
     model = ConanR1Model(
         lora_config=LoRAConfig(),
-        base_model=raw_config["model"]["base_model"],
-        base_model_revision=raw_config["model"].get("base_model_revision"),
+        base_model=core_protocol["base_model"],
+        base_model_revision=core_protocol["base_model_revision"],
         device=resolve_device(args.device),
-        reliability_config=build_reliability_config(
-            raw_config, raw_config["model"]["base_model"]
+        reliability_config=ReliabilityPathwayConfig(
+            **core_protocol["reliability_config"]
         ),
         motion_v_max=float(core_protocol["motion_v_max"]),
-        degradation_factor_names=load_config(raw_config["model"]["method_config"])[
-            "degradation_factors"
-        ],
+        degradation_factor_names=core_protocol["degradation_factor_names"],
+        motion_flow_parameters=core_protocol["motion_flow_parameters"],
     )
     model.load_core(args.checkpoint, is_trainable=False)
 
@@ -117,7 +115,18 @@ def main() -> None:
         print("WARNING: Output format is invalid — could not parse five-block structure.")
         result = {"raw_output": raw_output, "parsed": None}
     else:
-        interval = extract_temporal_interval(parsed.answer_block)
+        answer_fields = parse_answer_fields(
+            parsed.answer_block,
+            event_active=True,
+            temporal_active=True,
+            duration_sec=duration_sec,
+        )
+        if answer_fields is None:
+            print("WARNING: ANSWER does not satisfy the strict joint-task grammar.")
+            result = {"raw_output": raw_output, "parsed": None}
+            parsed = None
+    if parsed is not None:
+        interval = answer_fields.interval
         result = {
             "type": parsed.type_block,
             "influence": parsed.influence_block,

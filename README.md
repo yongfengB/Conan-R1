@@ -28,13 +28,12 @@ Included:
 - `training/rewards.py`: `r_d`, `r_e`, `r_t`, and `r_l`;
 - `model/parser.py`, `evaluation/evaluator.py`, and `evaluation/metrics.py`:
   strict parsing and all reported metric implementations;
-- `configs/`: method, full and LoRA-only SFT, GRPO, full-minus-one, structural,
-  and fixed-length
-  configurations;
+- `configs/`: method, full and LoRA-only SFT, GRPO, cumulative Stage-I,
+  full-minus-one reward, matched-continuation, and appendix configurations;
 - `dataset/augmentation.py` and `configs/degradation_protocol.yaml`:
   trajectory-aware occlusion and video-level temporal degradation state;
 - `data/annotation.schema.json` and `data/demo/`: schema plus a redistributable
-  35-instance, 20-source executable dataset;
+  32-instance, 20-source executable dataset;
 - `results/demo_raw_predictions.jsonl`: raw demo predictions used to test the
   builder-parser-tIoU interface;
 
@@ -79,9 +78,8 @@ Validate data and split identities:
 python scripts/validate_dataset.py \
   --data_dir data/demo \
   --expect_sources 20 \
-  --expect_instances 35 \
+  --expect_instances 32 \
   --check_videos \
-  --require_robustness_coverage \
   --report results/demo_dataset_validation.json
 ```
 
@@ -98,9 +96,9 @@ python scripts/score_predictions.py results/demo_raw_predictions.jsonl \
 The frozen demo identities are:
 
 ```text
-annotations SHA256: 37ca3cddd707fae1e855cc5a2e3450e436b11e3e2e2469ff681cc11350e0e3a7
-splits SHA256:      b097b305c682b8584a891c312d7b5eec0aa298d00600efc6d4963769ab4680c7
-raw predictions:    0b4c8bf96a1be9d62399dbb3242031482b43fcdd0da2b79c44adfb66ba7317da
+annotations SHA256: 9fec9f5abd2c5b048a58683fae2974be27af2944a92927795531ef1ee48b71fb
+splits SHA256:      2c01922699d4db9ed2ed600882c581c3dfd39d15015dd85d454e014dbb760771
+raw predictions:    82691610c39947efd0075f174682c74c6147f880268e055d27f29c7e92cf2b54
 ```
 
 ## Output contract and duplicate-interval rule
@@ -113,7 +111,8 @@ raw predictions:    0b4c8bf96a1be9d62399dbb3242031482b43fcdd0da2b79c44adfb66ba73
 <ANSWER>event_type: LABEL; interval: [start_sec, end_sec]<ANSWER_END>
 ```
 
-`<ANSWER>` contains exactly one event label and one second-based interval.
+`<ANSWER>` contains exactly the fields activated by the manifest task mask.
+For a joint prompt this is one event label followed by one second-based interval.
 Model-authored prose remains in `<REASONING>` and `<CONCLUSION>` and is never
 appended to the answer. Missing, reversed, out-of-range, or multiple intervals
 receive temporal reward zero. The unit tests exercise the complete
@@ -152,14 +151,24 @@ configs/generated/without_rd.yaml
 configs/generated/without_re.yaml
 configs/generated/without_rt.yaml
 configs/generated/without_rl.yaml
-configs/generated/fixed_length_70.yaml
+configs/generated/uniform_grpo.yaml
+configs/generated/stage1_plus_motion.yaml
+configs/generated/stage1_plus_reliability_supervision.yaml
+configs/generated/stage1_plus_reliability_fusion.yaml
+configs/generated/stage1_plus_event_pooling.yaml
+configs/generated/stage1_plus_temporal_reliability.yaml
+configs/generated/data_sft.yaml
+configs/generated/update_sft.yaml
+configs/generated/lora_grpo.yaml
+configs/generated/pathway_grpo.yaml
 configs/generated/conan_r1.yaml
 ```
 
 `experiments/experiment_matrix.yaml` records the two-stage method, runnable SFT
-controls, reward removals, the fixed-length control, and the five
-fixed-checkpoint reliability-field interventions. Configurations are not result
-evidence.
+controls, cumulative architecture, reward removals, matched continuations,
+appendix controls, and five fixed-checkpoint reliability-field interventions.
+Run `python scripts/materialize_experiments.py --overwrite` to regenerate all
+complete YAML files and their SHA256 manifest. Configurations are not result evidence.
 
 ## Full-data access and identity
 
@@ -206,6 +215,7 @@ python scripts/evaluate.py \
   --model_name Conan-R1 \
   --data_dir data/surv_vau \
   --split test \
+  --robustness_scope synthetic \
   --output results/conan_r1.json
 
 python scripts/evaluate_interventions.py \

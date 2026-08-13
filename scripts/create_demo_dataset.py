@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Create the small, redistributable Conan-R1 audit dataset.
 
-The demo is synthetic and is not a source of manuscript-scale results.  It is
-large enough to exercise source-level splitting, all four degradation domains,
-the strict output parser, raw-prediction scoring, and the tIoU calculation.
+The demo is synthetic and is not a source of manuscript-scale results.  It
+exercises source-level splitting, the exact synthetic operator implementation,
+the strict output parser, raw-prediction scoring, and the tIoU calculation.  It
+does not contain or claim a naturally degraded observation partition.
 """
 from __future__ import annotations
 
@@ -22,6 +23,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from dataset.splitting import stratified_partition
+from dataset.augmentation import synthesize_degradation
+from dataset.types import DegradationProfile, VideoClip
 from scripts.create_data_splits import file_sha256
 
 
@@ -54,6 +57,7 @@ def record(
         "video_id": video_id,
         "source_video_id": source_id,
         "source_dataset": "synthetic_demo",
+        "scene_environment": "outdoor",
         "prompt": "Identify the traffic event and its temporal interval.",
         "degradation_profile": profile,
         "degradation_level": level,
@@ -75,9 +79,6 @@ def record(
             "reliability_level": max(0.0, 1.0 - level),
             "cue_impact": "reduces contour and motion-cue clarity" if level else "no synthetic evidence loss",
         },
-        "occlusion_token_mask": None,
-        "reasoning_target_length": int(round(32 + 96 * level)),
-        "reasoning_target_source": "deterministic_policy",
         "duration_sec": 26.0 / 6.0,
         "fps": 6.0,
         "num_source_frames": 26,
@@ -94,11 +95,10 @@ def record(
     }
 
 
-def base_frames(source_index: int, natural_source: bool = False) -> List[np.ndarray]:
+def base_frames(source_index: int) -> List[np.ndarray]:
     frames: List[np.ndarray] = []
     for frame_index in range(26):
-        background = 18 if natural_source else 52
-        frame = np.full((64, 64, 3), background, dtype=np.uint8)
+        frame = np.full((64, 64, 3), 52, dtype=np.uint8)
         cv2.line(frame, (0, 48), (63, 48), (180, 180, 180), 2)
         lead_x = 36
         follow_x = min(31, 5 + frame_index)
@@ -109,20 +109,28 @@ def base_frames(source_index: int, natural_source: bool = False) -> List[np.ndar
     return frames
 
 
-def transformed_frames(frames: Iterable[np.ndarray], domain: str, level: float) -> List[np.ndarray]:
-    result = [frame.copy() for frame in frames]
-    if domain == "synthetic_seen":
-        kernel = {0.2: 3, 0.4: 7, 0.8: 13}[level]
-        result = [cv2.GaussianBlur(frame, (kernel, 1), 0) for frame in result]
-    elif domain == "synthetic_unseen":
-        compressed = []
-        for frame in result:
-            ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 20])
-            if not ok:
-                raise RuntimeError("Could not encode a demo JPEG frame")
-            compressed.append(cv2.imdecode(encoded, cv2.IMREAD_COLOR))
-        result = compressed
-    return result
+def synthesize_demo_row(row: dict, frames: List[np.ndarray], seed: int) -> List[np.ndarray]:
+    profile = DegradationProfile(
+        factors=[(str(name), float(severity)) for name, severity in row["degradation_profile"]],
+        difficulty_level=float(row["degradation_level"]),
+        domain=str(row["degradation_domain"]),
+    )
+    source = VideoClip(
+        video_id=str(row["source_video_id"]),
+        source_video_id=str(row["source_video_id"]),
+        source_dataset="synthetic_demo",
+        frames=[frame.copy() for frame in frames],
+        start_frame=6,
+        end_frame=17,
+        start_sec=1.0,
+        end_sec=2.75,
+        fps=6.0,
+        duration_sec=26.0 / 6.0,
+        event_type="rear-end collision",
+    )
+    degraded = synthesize_degradation(source, profile, seed=seed)
+    row["synthesis_metadata"] = degraded.synthesis_metadata
+    return degraded.frames
 
 
 def write_video(path: Path, frames: Iterable[np.ndarray]) -> None:
@@ -133,7 +141,7 @@ def write_video(path: Path, frames: Iterable[np.ndarray]) -> None:
     if not writer.isOpened():
         raise RuntimeError(f"Could not create demo video: {path}")
     for frame in frames:
-        writer.write(frame)
+        writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
     writer.release()
 
 
@@ -148,6 +156,10 @@ def structured_prediction(row: dict) -> str:
 
 
 def build(output: Path, seed: int) -> Dict[str, object]:
+    videos = output / "videos"
+    if videos.is_dir():
+        for stale in videos.glob("demo_source_*.mp4"):
+            stale.unlink()
     base_records = [
         record(
             f"demo_source_{index:03d}",
@@ -191,17 +203,11 @@ def build(output: Path, seed: int) -> Dict[str, object]:
                 record(source_id, "seen40", "synthetic_seen", 0.4, [["motion_blur", 0.4]], "surv-vau-degradation-v1", "single_operator"),
                 record(source_id, "seen80", "synthetic_seen", 0.8, [["motion_blur", 0.8]], "surv-vau-degradation-v1", "single_operator"),
                 record(source_id, "unseen80", "synthetic_unseen", 0.8, [["compression_artifact", 0.8]], "surv-vau-degradation-v1", "held_out_operator"),
-                record(source_id, "natural", "natural", 0.0, [], "source_observation", "none"),
             ]
         )
     rows.sort(key=lambda item: item["video_id"])
 
     output.mkdir(parents=True, exist_ok=True)
-    annotations = output / "annotations.jsonl"
-    annotations.write_text(
-        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
-        encoding="utf-8",
-    )
     split_map = {
         row["video_id"]: source_split[row["source_video_id"]] for row in rows
     }
@@ -210,9 +216,14 @@ def build(output: Path, seed: int) -> Dict[str, object]:
 
     for row in rows:
         source_index = int(row["source_video_id"].rsplit("_", 1)[1])
-        frames = base_frames(source_index, natural_source=row["degradation_domain"] == "natural")
-        frames = transformed_frames(frames, row["degradation_domain"], float(row["degradation_level"]))
+        frames = synthesize_demo_row(row, base_frames(source_index), seed)
         write_video(output / "videos" / f"{row['video_id']}.mp4", frames)
+
+    annotations = output / "annotations.jsonl"
+    annotations.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
 
     predictions_path = REPO_ROOT / "results" / "demo_raw_predictions.jsonl"
     predictions_path.parent.mkdir(parents=True, exist_ok=True)
@@ -231,7 +242,7 @@ def build(output: Path, seed: int) -> Dict[str, object]:
 
     manifest = {
         "schema_version": 1,
-        "dataset_version": "conan-r1-reliability-demo-v2",
+        "dataset_version": "conan-r1-reliability-demo-v3",
         "artifact_role": "executable_schema_parser_metric_demo_not_paper_evidence",
         "split_rule_id": "source-stratified-70-15-15_then-train-30-70-v1",
         "seed": seed,

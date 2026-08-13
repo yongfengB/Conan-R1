@@ -13,7 +13,11 @@ sys.path.insert(0, str(REPO_ROOT))
 from dataset.dataset import SurvVAUDataset
 from model.conan_r1 import ConanR1Model, LoRAConfig
 from training.grpo_trainer import GRPOConfig, GRPOTrainer
-from scripts.train_sft import build_reliability_config, load_motion_vmax
+from scripts.train_sft import (
+    build_reliability_config,
+    load_motion_flow_parameters,
+    load_motion_vmax,
+)
 from scripts._common import (
     finish_distributed,
     init_distributed,
@@ -41,8 +45,8 @@ def main() -> None:
     train_cfg = GRPOConfig.from_yaml(args.config)
     data_cfg = raw["data"]
     model_cfg = raw["model"]
-    checkpoint = model_cfg["sft_checkpoint"]
-    if not Path(checkpoint).exists():
+    checkpoint = model_cfg.get("sft_checkpoint")
+    if checkpoint and not Path(checkpoint).exists():
         raise FileNotFoundError(f"SFT checkpoint not found: {checkpoint}")
 
     require_dataset(data_cfg["data_dir"])
@@ -53,6 +57,7 @@ def main() -> None:
         split=data_cfg.get("split", "rl_train"),
         num_frames=int(data_cfg.get("num_frames", 25)),
         frame_size=int(data_cfg.get("frame_size", 224)),
+        force_joint_task=not train_cfg.task_masking,
     )
     if not dataset:
         raise RuntimeError("The configured RL split contains no samples.")
@@ -62,9 +67,18 @@ def main() -> None:
         alpha=int(model_cfg.get("lora_alpha", 32)),
         dropout=float(model_cfg.get("lora_dropout", 0.05)),
     )
-    reliability_config = build_reliability_config(raw, model_cfg["base_model"])
-    motion_v_max = load_motion_vmax(raw)
-    factor_names = load_config(model_cfg["method_config"])["degradation_factors"]
+    use_pathway = train_cfg.pathway_mode == "reliability"
+    reliability_config = (
+        build_reliability_config(raw, model_cfg["base_model"])
+        if use_pathway
+        else None
+    )
+    motion_v_max = load_motion_vmax(raw) if use_pathway else None
+    factor_names = (
+        load_config(model_cfg["method_config"])["degradation_factors"]
+        if use_pathway
+        else None
+    )
     model = ConanR1Model(
         model_cfg["base_model"],
         base_model_revision=model_cfg.get("base_model_revision"),
@@ -73,8 +87,13 @@ def main() -> None:
         reliability_config=reliability_config,
         motion_v_max=motion_v_max,
         degradation_factor_names=factor_names,
+        motion_flow_parameters=(load_motion_flow_parameters(raw) if use_pathway else None),
     )
-    model.load_core(checkpoint, is_trainable=True)
+    if checkpoint:
+        if use_pathway:
+            model.load_core(checkpoint, is_trainable=True)
+        else:
+            model.load_lora(checkpoint, is_trainable=True)
     ref_model = ConanR1Model(
         model_cfg["base_model"],
         base_model_revision=model_cfg.get("base_model_revision"),
@@ -83,8 +102,15 @@ def main() -> None:
         reliability_config=reliability_config,
         motion_v_max=motion_v_max,
         degradation_factor_names=factor_names,
+        motion_flow_parameters=(load_motion_flow_parameters(raw) if use_pathway else None),
     )
-    ref_model.load_core(checkpoint, is_trainable=False)
+    if checkpoint:
+        if use_pathway:
+            ref_model.load_core(checkpoint, is_trainable=False)
+        else:
+            ref_model.load_lora(checkpoint, is_trainable=False)
+    else:
+        ref_model._policy_model().load_state_dict(model._policy_model().state_dict())
     if world_size > 1:
         model.enable_distributed(int(device.rsplit(":", 1)[1]))
 

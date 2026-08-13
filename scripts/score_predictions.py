@@ -27,6 +27,11 @@ def main() -> None:
     parser.add_argument("--split", default="test")
     parser.add_argument("--wts", action="store_true")
     parser.add_argument(
+        "--require_complete_robustness",
+        action="store_true",
+        help="Require real clean/seen/unseen/natural test partitions.",
+    )
+    parser.add_argument(
         "--decoding",
         default="greedy",
         choices=["greedy", "sampling"],
@@ -65,13 +70,18 @@ def main() -> None:
     metrics, details = Evaluator().evaluate(
         predictions, references, include_wts_metrics=args.wts
     )
-    coverage = None if args.wts else validate_robustness_coverage(details)
+    coverage = (
+        validate_robustness_coverage(details)
+        if args.require_complete_robustness and not args.wts
+        else None
+    )
     payload = {
         "protocol": {
             "model_name": args.model_name or Path(args.predictions_jsonl).stem,
             "prediction_file": args.predictions_jsonl,
             "split": args.split,
             "decoding": args.decoding,
+            "complete_robustness_required": args.require_complete_robustness,
         },
         "metrics": metrics,
         "robustness": {} if args.wts else summarize_robustness(details),

@@ -115,10 +115,13 @@ def load_core_protocol(checkpoint_root: Path) -> Dict[str, Any]:
     if not path.is_file():
         raise FileNotFoundError(f"Core checkpoint metadata not found: {path}")
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("format_version") != 3:
-        raise ValueError("Only Conan-R1 core checkpoint format version 3 is accepted.")
+    if payload.get("format_version") != 4:
+        raise ValueError("Only Conan-R1 core checkpoint format version 4 is accepted.")
     if float(payload.get("motion_v_max", 0.0)) <= 0.0:
         raise ValueError("Core checkpoint has an invalid motion_v_max.")
+    from dataset.video_utils import validate_farneback_parameters
+
+    validate_farneback_parameters(payload.get("motion_flow_parameters", {}))
     return payload
 
 
@@ -179,7 +182,8 @@ def write_run_metadata(
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     config = load_config(config_path)
-    with open(output / "resolved_config.yaml", "w", encoding="utf-8") as handle:
+    resolved_path = output / "resolved_config.yaml"
+    with open(resolved_path, "w", encoding="utf-8") as handle:
         yaml.safe_dump(config, handle, sort_keys=False)
 
     metadata = collect_runtime_metadata(
@@ -187,6 +191,7 @@ def write_run_metadata(
         checkpoint=output_dir,
     )
     metadata["config_sha256"] = sha256_file(Path(config_path))
+    metadata["resolved_config_sha256"] = sha256_file(resolved_path)
     if extra:
         metadata.update(extra)
     with open(output / "run_metadata.json", "w", encoding="utf-8") as handle:

@@ -97,7 +97,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--output",
-        default="../Conan-R1-core-reference-2026-08-12.zip",
+        default="../Conan-R1-core-reference-2026-08-13.zip",
     )
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
@@ -129,7 +129,7 @@ def main() -> None:
         for relative, payload in sorted(archive_entries):
             info = zipfile.ZipInfo(
                 filename=f"Conan-R1/{relative}",
-                date_time=(2026, 8, 12, 0, 0, 0),
+                date_time=(2026, 8, 13, 0, 0, 0),
             )
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = (0o755 if relative.startswith("scripts/") else 0o644) << 16

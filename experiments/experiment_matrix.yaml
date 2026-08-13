@@ -1,5 +1,5 @@
-schema_version: 2
-paper_revision: 2026-08-12
+schema_version: 3
+paper_revision: 2026-08-13
 seed: 42
 artifact_scope: executable_core_method_and_demo_audit
 
@@ -27,15 +27,182 @@ runnable_sft_controls:
     config: configs/no_type_influence_sft_config.yaml
     command: torchrun --standalone --nproc_per_node=4 scripts/train_sft.py --config configs/no_type_influence_sft_config.yaml
 
+materialized_blocks:
+  - same_backbone_controls
+  - stage1_architecture
+  - stage2_reward
+  - matched_stage2
+  - reward_weight_sensitivity
+  - reliability_target_stage1
+  - reliability_target_stage2
+  - diagnostic_slot_controls
+
+same_backbone_controls:
+  base_config: configs/grpo_config.yaml
+  trainer: train_grpo
+  variants:
+    - name: global_grpo
+      overrides:
+        model.sft_checkpoint: checkpoints/structured_sft
+        model.policy_scope: lora_only
+        model.pathway_mode: none
+        auxiliary_losses.preserve_during_grpo: false
+        auxiliary_losses.lambda_d_rl: 0.0
+        auxiliary_losses.lambda_q_rl: 0.0
+        auxiliary_losses.lambda_c_rl: 0.0
+    - name: grpo_only
+      overrides:
+        model.sft_checkpoint: null
+        model.policy_scope: lora_only
+        model.pathway_mode: none
+        auxiliary_losses.preserve_during_grpo: false
+        auxiliary_losses.lambda_d_rl: 0.0
+        auxiliary_losses.lambda_q_rl: 0.0
+        auxiliary_losses.lambda_c_rl: 0.0
+
+stage1_architecture:
+  base_config: configs/sft_config.yaml
+  trainer: train_sft
+  variants:
+    - name: stage1_plus_motion
+      overrides:
+        model.pathway.use_reliability_fusion: false
+        model.pathway.use_event_aware_pooling: false
+        model.pathway.use_temporal_reliability: false
+        auxiliary_losses.lambda_d: 0.0
+        auxiliary_losses.lambda_q_sft: 0.0
+        auxiliary_losses.lambda_c_sft: 0.0
+    - name: stage1_plus_reliability_supervision
+      overrides:
+        model.pathway.use_reliability_fusion: false
+        model.pathway.use_event_aware_pooling: false
+        model.pathway.use_temporal_reliability: false
+    - name: stage1_plus_reliability_fusion
+      overrides:
+        model.pathway.use_reliability_fusion: true
+        model.pathway.use_event_aware_pooling: false
+        model.pathway.use_temporal_reliability: false
+    - name: stage1_plus_event_pooling
+      overrides:
+        model.pathway.use_reliability_fusion: true
+        model.pathway.use_event_aware_pooling: true
+        model.pathway.use_temporal_reliability: false
+    - name: stage1_plus_temporal_reliability
+      overrides: {}
+
 stage2_reward:
+  base_config: configs/grpo_config.yaml
+  trainer: train_grpo
   shared_initialization: checkpoints/sft30
   variants:
+    - {name: uniform_grpo, overrides: {reward.task_masking: false}}
     - {name: without_rd, overrides: {reward.w_d: 0.0, reward.w_e: 0.3333333333, reward.w_t: 0.3333333333, reward.w_l: 0.3333333334}}
     - {name: without_re, overrides: {reward.w_d: 0.3333333333, reward.w_e: 0.0, reward.w_t: 0.3333333333, reward.w_l: 0.3333333334}}
     - {name: without_rt, overrides: {reward.w_d: 0.3333333333, reward.w_e: 0.3333333333, reward.w_t: 0.0, reward.w_l: 0.3333333334}}
     - {name: without_rl, overrides: {reward.w_d: 0.3333333333, reward.w_e: 0.3333333333, reward.w_t: 0.3333333334, reward.w_l: 0.0}}
-    - {name: fixed_length_70, overrides: {reward.fixed_reasoning_target_length: 70}}
     - {name: conan_r1, overrides: {}}
+
+matched_stage2:
+  base_config: configs/grpo_config.yaml
+  trainer: train_grpo
+  shared_initialization: checkpoints/sft30
+  shared_split: rl_train
+  variants:
+    - name: data_sft
+      trainer: train_sft
+      base_config: configs/sft_config.yaml
+      overrides:
+        model.init_checkpoint: checkpoints/sft30
+        model.policy_scope: full
+        training.epochs: 5
+        data.splits: [rl_train]
+    - name: update_sft
+      trainer: train_sft
+      base_config: configs/sft_config.yaml
+      overrides:
+        model.init_checkpoint: checkpoints/sft30
+        model.policy_scope: full
+        training.epochs: 10
+        data.splits: [rl_train]
+    - name: lora_grpo
+      overrides:
+        model.policy_scope: lora_only
+        model.pathway_mode: reliability
+        auxiliary_losses.preserve_during_grpo: false
+        auxiliary_losses.lambda_d_rl: 0.0
+        auxiliary_losses.lambda_q_rl: 0.0
+        auxiliary_losses.lambda_c_rl: 0.0
+    - name: pathway_grpo
+      overrides:
+        model.policy_scope: full
+        model.pathway_mode: reliability
+        auxiliary_losses.preserve_during_grpo: false
+        auxiliary_losses.lambda_d_rl: 0.0
+        auxiliary_losses.lambda_q_rl: 0.0
+        auxiliary_losses.lambda_c_rl: 0.0
+
+reward_weight_sensitivity:
+  base_config: configs/grpo_config.yaml
+  trainer: train_grpo
+  variants:
+    - {name: weights_rd_040, overrides: {reward.w_d: 0.40, reward.w_e: 0.20, reward.w_t: 0.20, reward.w_l: 0.20}}
+    - {name: weights_event_temporal_035, overrides: {reward.w_d: 0.15, reward.w_e: 0.35, reward.w_t: 0.35, reward.w_l: 0.15}}
+    - {name: weights_compactness_010, overrides: {reward.w_d: 0.30, reward.w_e: 0.30, reward.w_t: 0.30, reward.w_l: 0.10}}
+
+reliability_target_stage1:
+  base_config: configs/sft_config.yaml
+  trainer: train_sft
+  variants:
+    - name: reliability_without_rel_sft
+      overrides: {auxiliary_losses.lambda_q_sft: 0.0}
+    - name: reliability_online_target_sft
+      overrides:
+        auxiliary_losses.reliability_target: online_motion_target
+        auxiliary_losses.ema_update_after_optimizer_step: false
+    - name: reliability_frozen_teacher_sft
+      overrides:
+        auxiliary_losses.reliability_target: frozen_motion_teacher
+        auxiliary_losses.ema_update_after_optimizer_step: false
+    - name: reliability_no_mask_sft
+      overrides: {auxiliary_losses.occlusion_mask_adjustment: false}
+
+reliability_target_stage2:
+  base_config: configs/grpo_config.yaml
+  trainer: train_grpo
+  variants:
+    - name: reliability_without_rel_grpo
+      overrides:
+        model.sft_checkpoint: checkpoints/reliability_without_rel_sft
+        auxiliary_losses.lambda_q_rl: 0.0
+    - name: reliability_online_target_grpo
+      overrides:
+        model.sft_checkpoint: checkpoints/reliability_online_target_sft
+        auxiliary_losses.reliability_target: online_motion_target
+        auxiliary_losses.ema_update_after_optimizer_step: false
+    - name: reliability_frozen_teacher_grpo
+      overrides:
+        model.sft_checkpoint: checkpoints/reliability_frozen_teacher_sft
+        auxiliary_losses.reliability_target: frozen_motion_teacher
+        auxiliary_losses.ema_update_after_optimizer_step: false
+    - name: reliability_no_mask_grpo
+      overrides:
+        model.sft_checkpoint: checkpoints/reliability_no_mask_sft
+        auxiliary_losses.occlusion_mask_adjustment: false
+
+diagnostic_slot_controls:
+  base_config: configs/grpo_config.yaml
+  trainer: train_grpo
+  variants:
+    - name: slot_without_stage1_sft
+      trainer: train_sft
+      base_config: configs/sft_config.yaml
+      overrides: {auxiliary_losses.lambda_c_sft: 0.0}
+    - name: slot_without_both
+      overrides:
+        model.sft_checkpoint: checkpoints/slot_without_stage1_sft
+        auxiliary_losses.lambda_c_rl: 0.0
+    - name: slot_stage1_only
+      overrides: {auxiliary_losses.lambda_c_rl: 0.0}
 
 reliability_field_interventions:
   command: python scripts/evaluate_interventions.py --checkpoint checkpoints/grpo_full --data_dir data/surv_vau --split test --output results/reliability_interventions.json

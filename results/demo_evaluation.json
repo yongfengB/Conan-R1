@@ -3,12 +3,13 @@
     "model_name": "canonical-demo",
     "prediction_file": "results/demo_raw_predictions.jsonl",
     "split": "test",
-    "decoding": "greedy"
+    "decoding": "greedy",
+    "complete_robustness_required": false
   },
   "metrics": {
     "BLEU-1": 1.0,
     "BLEU-4": 1.0,
-    "METEOR": 0.9976851851851853,
+    "METEOR": 0.9976851851851852,
     "ROUGE-L": 1.0,
     "tIoU": 1.0,
     "Parse-Success": 1.0,
@@ -51,13 +52,6 @@
     },
     "domains": {
       "clean": {
-        "BLEU-1": 1.0,
-        "BLEU-4": 1.0,
-        "METEOR": 0.9976851851851852,
-        "ROUGE-L": 1.0,
-        "tIoU": 1.0
-      },
-      "natural": {
         "BLEU-1": 1.0,
         "BLEU-4": 1.0,
         "METEOR": 0.9976851851851852,
@@ -236,17 +230,7 @@
     },
     "paired_level_source_count": 3
   },
-  "robustness_coverage": {
-    "synthetic_seen_level:0.0": 3,
-    "synthetic_seen_level:0.2": 3,
-    "synthetic_seen_level:0.4": 3,
-    "synthetic_seen_level:0.8": 3,
-    "domain:clean": 3,
-    "domain:natural": 3,
-    "domain:synthetic_seen": 9,
-    "domain:synthetic_unseen": 3,
-    "paired_level_sources": 3
-  },
+  "robustness_coverage": null,
   "per_sample": [
     {
       "video_id": "demo_source_000__clean",
@@ -269,34 +253,6 @@
       "ROUGE-L": 1.0,
       "degradation_level": 0.0,
       "degradation_domain": "clean",
-      "degradation_combination": "none",
-      "synthesis_applied": false,
-      "degradation_protocol": "source_observation",
-      "event_active": true,
-      "temporal_active": true,
-      "raw_output": "<TYPE>none<TYPE_END><INFLUENCE>affected_interval: [0.000, 4.333]; evidence_branch: both; reliability_level: 1.0; cue_impact: no synthetic evidence loss<INFLUENCE_END><REASONING>The following vehicle closes the gap before contact.<REASONING_END><CONCLUSION>A rear-end collision occurs.<CONCLUSION_END><ANSWER>event_type: rear-end collision; interval: [1.000, 2.750]<ANSWER_END>"
-    },
-    {
-      "video_id": "demo_source_000__natural",
-      "source_video_id": "demo_source_000",
-      "parse_success": true,
-      "predicted_answer": "event_type: rear-end collision; interval: [1.000, 2.750]",
-      "ground_truth_answer": "event_type: rear-end collision; interval: [1.000, 2.750]",
-      "predicted_event_type": "rear-end collision",
-      "ground_truth_event_type": "rear-end collision",
-      "predicted_interval": [
-        1.0,
-        2.75
-      ],
-      "ground_truth_interval": [
-        1.0,
-        2.75
-      ],
-      "tIoU": 1.0,
-      "METEOR": 0.9976851851851852,
-      "ROUGE-L": 1.0,
-      "degradation_level": 0.0,
-      "degradation_domain": "natural",
       "degradation_combination": "none",
       "synthesis_applied": false,
       "degradation_protocol": "source_observation",
@@ -445,34 +401,6 @@
       "raw_output": "<TYPE>none<TYPE_END><INFLUENCE>affected_interval: [0.000, 4.333]; evidence_branch: both; reliability_level: 1.0; cue_impact: no synthetic evidence loss<INFLUENCE_END><REASONING>The following vehicle closes the gap before contact.<REASONING_END><CONCLUSION>A rear-end collision occurs.<CONCLUSION_END><ANSWER>event_type: rear-end collision; interval: [1.000, 2.750]<ANSWER_END>"
     },
     {
-      "video_id": "demo_source_003__natural",
-      "source_video_id": "demo_source_003",
-      "parse_success": true,
-      "predicted_answer": "event_type: rear-end collision; interval: [1.000, 2.750]",
-      "ground_truth_answer": "event_type: rear-end collision; interval: [1.000, 2.750]",
-      "predicted_event_type": "rear-end collision",
-      "ground_truth_event_type": "rear-end collision",
-      "predicted_interval": [
-        1.0,
-        2.75
-      ],
-      "ground_truth_interval": [
-        1.0,
-        2.75
-      ],
-      "tIoU": 1.0,
-      "METEOR": 0.9976851851851852,
-      "ROUGE-L": 1.0,
-      "degradation_level": 0.0,
-      "degradation_domain": "natural",
-      "degradation_combination": "none",
-      "synthesis_applied": false,
-      "degradation_protocol": "source_observation",
-      "event_active": true,
-      "temporal_active": true,
-      "raw_output": "<TYPE>none<TYPE_END><INFLUENCE>affected_interval: [0.000, 4.333]; evidence_branch: both; reliability_level: 1.0; cue_impact: no synthetic evidence loss<INFLUENCE_END><REASONING>The following vehicle closes the gap before contact.<REASONING_END><CONCLUSION>A rear-end collision occurs.<CONCLUSION_END><ANSWER>event_type: rear-end collision; interval: [1.000, 2.750]<ANSWER_END>"
-    },
-    {
       "video_id": "demo_source_003__seen20",
       "source_video_id": "demo_source_003",
       "parse_success": true,
@@ -613,34 +541,6 @@
       "raw_output": "<TYPE>none<TYPE_END><INFLUENCE>affected_interval: [0.000, 4.333]; evidence_branch: both; reliability_level: 1.0; cue_impact: no synthetic evidence loss<INFLUENCE_END><REASONING>The following vehicle closes the gap before contact.<REASONING_END><CONCLUSION>A rear-end collision occurs.<CONCLUSION_END><ANSWER>event_type: rear-end collision; interval: [1.000, 2.750]<ANSWER_END>"
     },
     {
-      "video_id": "demo_source_008__natural",
-      "source_video_id": "demo_source_008",
-      "parse_success": true,
-      "predicted_answer": "event_type: rear-end collision; interval: [1.000, 2.750]",
-      "ground_truth_answer": "event_type: rear-end collision; interval: [1.000, 2.750]",
-      "predicted_event_type": "rear-end collision",
-      "ground_truth_event_type": "rear-end collision",
-      "predicted_interval": [
-        1.0,
-        2.75
-      ],
-      "ground_truth_interval": [
-        1.0,
-        2.75
-      ],
-      "tIoU": 1.0,
-      "METEOR": 0.9976851851851852,
-      "ROUGE-L": 1.0,
-      "degradation_level": 0.0,
-      "degradation_domain": "natural",
-      "degradation_combination": "none",
-      "synthesis_applied": false,
-      "degradation_protocol": "source_observation",
-      "event_active": true,
-      "temporal_active": true,
-      "raw_output": "<TYPE>none<TYPE_END><INFLUENCE>affected_interval: [0.000, 4.333]; evidence_branch: both; reliability_level: 1.0; cue_impact: no synthetic evidence loss<INFLUENCE_END><REASONING>The following vehicle closes the gap before contact.<REASONING_END><CONCLUSION>A rear-end collision occurs.<CONCLUSION_END><ANSWER>event_type: rear-end collision; interval: [1.000, 2.750]<ANSWER_END>"
-    },
-    {
       "video_id": "demo_source_008__seen20",
       "source_video_id": "demo_source_008",
       "parse_success": true,
@@ -754,7 +654,7 @@
     }
   ],
   "provenance": {
-    "created_at_utc": "2026-08-12T10:51:29.463316+00:00",
+    "created_at_utc": "2026-08-13T05:37:19.708149+00:00",
     "python_version": "3.9.7 | packaged by conda-forge | (default, Sep 29 2021, 19:24:02) \n[Clang 11.1.0 ]",
     "platform": "macOS-26.2-arm64-arm-64bit",
     "torch_version": "1.10.1",
@@ -775,9 +675,9 @@
       "--output",
       "results/demo_evaluation.json"
     ],
-    "annotations_sha256": "37ca3cddd707fae1e855cc5a2e3450e436b11e3e2e2469ff681cc11350e0e3a7",
-    "splits_sha256": "b097b305c682b8584a891c312d7b5eec0aa298d00600efc6d4963769ab4680c7",
-    "split_manifest_sha256": "2d1c47e972dc7ee800aa970e81686bc6ad523415f2fbd98faf3dd4634dae898e",
-    "predictions_sha256": "0b4c8bf96a1be9d62399dbb3242031482b43fcdd0da2b79c44adfb66ba7317da"
+    "annotations_sha256": "9fec9f5abd2c5b048a58683fae2974be27af2944a92927795531ef1ee48b71fb",
+    "splits_sha256": "2c01922699d4db9ed2ed600882c581c3dfd39d15015dd85d454e014dbb760771",
+    "split_manifest_sha256": "bb3e158c6934785a297434d4d866b6167565345e0ec052f7269399e79cf51c96",
+    "predictions_sha256": "82691610c39947efd0075f174682c74c6147f880268e055d27f29c7e92cf2b54"
   }
 }

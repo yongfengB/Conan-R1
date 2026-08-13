@@ -7,6 +7,7 @@ model:
   lora_dropout: 0.05
   method_config: configs/method_config.yaml
   policy_scope: full
+  pathway_mode: reliability
   policy_definition: full_response_changing_policy
 training:
   lr: 1.0e-05
@@ -36,8 +37,8 @@ reward:
   lambda_s: 0.5
   lambda_fp: 0.3
   lambda_fn: 0.3
-  length_tolerance: 0.2
-  fixed_reasoning_target_length: null
+  compactness_base_budget: 32
+  compactness_per_task_budget: 32
   task_masking: true
   renormalize_active_weights: true
   malformed_active_field_zeroes_all_active_rewards: true
@@ -54,5 +55,9 @@ data:
   require_native_motion_pairs: true
   require_influence_targets: true
 output:
-  checkpoint_dir: checkpoints/grpo_without_rd
+  checkpoint_dir: checkpoints/without_rd
   log_file: training_log.jsonl
+experiment:
+  matrix_block: stage2_reward
+  variant: without_rd
+  base_config: configs/grpo_config.yaml

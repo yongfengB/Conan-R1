@@ -5,8 +5,7 @@ import logging
 from typing import Dict, List, Sequence, Tuple
 
 from model.parser import (
-    extract_event_type,
-    extract_temporal_interval,
+    parse_answer_fields,
     parse_structured_output,
 )
 from .metrics import (
@@ -42,14 +41,29 @@ class Evaluator:
 
         for prediction, reference in zip(predictions, references):
             parsed = parse_structured_output(prediction)
-            answer = parsed.answer_block if parsed is not None else ""
-            predicted_interval = extract_temporal_interval(answer)
-            predicted_event = extract_event_type(answer)
             task_mask = reference.get(
                 "task_mask", {"event": True, "temporal": True}
             )
             event_active = bool(task_mask.get("event", True))
             temporal_active = bool(task_mask.get("temporal", True))
+            answer_fields = (
+                parse_answer_fields(
+                    parsed.answer_block,
+                    event_active=event_active,
+                    temporal_active=temporal_active,
+                    duration_sec=float(reference["duration_sec"]),
+                )
+                if parsed is not None
+                else None
+            )
+            parse_success = parsed is not None and answer_fields is not None
+            answer = parsed.answer_block if parse_success else ""
+            predicted_interval = (
+                answer_fields.interval if answer_fields is not None else None
+            )
+            predicted_event = (
+                answer_fields.event_type if answer_fields is not None else None
+            )
             gt_answer = reference.get("answer_annotation", "")
             gt_interval = tuple(reference["gt_interval"])
             tiou = compute_tiou(
@@ -77,7 +91,7 @@ class Evaluator:
                 {
                     "video_id": reference.get("video_id", ""),
                     "source_video_id": reference.get("source_video_id", ""),
-                    "parse_success": parsed is not None,
+                    "parse_success": parse_success,
                     "predicted_answer": answer,
                     "ground_truth_answer": gt_answer,
                     "predicted_event_type": predicted_event,

@@ -15,6 +15,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from dataset.builder import SurvVAUBuilder
+from dataset.degradation_protocol import (
+    degradation_combination_label,
+    load_degradation_protocol,
+)
+from dataset.types import DegradationProfile
 from dataset.video_utils import load_video, native_motion_pairs
 from model.conan_r1 import ConanR1Model
 from scripts._common import resolve_device, seed_everything
@@ -86,6 +91,7 @@ def main() -> None:
     )
 
     split_map = {}
+    degradation_protocol = load_degradation_protocol()
     source_files = {}
     for source_dir in args.source_dir:
         for source_path in Path(source_dir).glob("*.mp4"):
@@ -111,15 +117,21 @@ def main() -> None:
                     "video_id": sample.video_id,
                     "source_video_id": sample.source_video_id,
                     "source_dataset": sample.source_dataset,
+                    "scene_environment": sample.scene_environment,
                     "prompt": sample.prompt,
                     "degradation_profile": sample.degradation_profile,
                     "degradation_level": sample.difficulty_level,
                     "degradation_domain": (
                         sample.degradation_domain
                     ),
-                    "degradation_combination": "+".join(
-                        factor for factor, _ in sample.degradation_profile
-                    ) or "none",
+                    "degradation_combination": degradation_combination_label(
+                        DegradationProfile(
+                            factors=sample.degradation_profile,
+                            difficulty_level=sample.difficulty_level,
+                            domain=sample.degradation_domain,
+                        ),
+                        degradation_protocol,
+                    ),
                     "synthesis_applied": sample.degradation_domain.startswith(
                         "synthetic_"
                     ),
@@ -138,9 +150,6 @@ def main() -> None:
                         (second - first) / sample.fps for first, second in pairs
                     ],
                     "influence_targets": sample.influence_targets,
-                    "occlusion_token_mask": None,
-                    "reasoning_target_length": sample.reasoning_target_length,
-                    "reasoning_target_source": sample.reasoning_target_source,
                     "duration_sec": sample.duration_sec,
                     "fps": sample.fps,
                     "num_source_frames": sample.num_source_frames,
@@ -161,10 +170,23 @@ def main() -> None:
         json.dump(split_map, handle, indent=2)
     split_manifest = {
         "schema_version": 1,
+        "split_rule_id": "source-stratified-70-15-15_then-train-30-70-v1",
         "seed": args.seed,
+        "outer_fractions": {"train": 0.70, "val": 0.15, "test": 0.15},
+        "inner_train_fractions": {"sft_train": 0.30, "rl_train": 0.70},
+        "stratification": ["source_dataset", "event_type"],
         "annotations_sha256": _sha256(annotations_path),
         "splits_sha256": _sha256(splits_path),
         "instance_counts": dict(Counter(split_map.values())),
+        "source_counts": dict(
+            Counter(
+                {
+                    sample.source_video_id: sample.split
+                    for samples in splits.values()
+                    for sample in samples
+                }.values()
+            )
+        ),
         "source_video_isolation": True,
         "builder": "SurvVAUBuilder",
     }

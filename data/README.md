@@ -12,10 +12,10 @@ data/surv_vau/
 ```
 
 Every record includes the event/interval annotation, structured text fields,
-source identity and source-file pairing, degradation profile, severity, domain,
-task mask, 25 anchor indices, native adjacent-frame pairs, elapsed seconds,
-influence targets, logged occlusion masks, `synthesis_applied`, and the
-degradation protocol.
+source identity and source-file pairing, scene environment, degradation profile,
+severity, domain, task mask, 25 anchor indices, native adjacent-frame pairs,
+elapsed seconds, influence targets, synthesis metadata with logged occlusion
+boxes, `synthesis_applied`, and the degradation protocol.
 
 The exact JSON field contract is `data/annotation.schema.json`. The committed
 `data/demo/` directory is synthetic, redistributable, and executable; it is not
@@ -56,6 +56,10 @@ two overlapping event-relevant tracks. Boxes use normalized
 
 The builder interpolates boxes between annotated frames and raises an error if
 a spatial operator has no admissible target.
+
+Each source annotation also declares `scene_environment` as `outdoor`, `tunnel`,
+or `indoor`. The validator enforces the protocol compatibility table: rain/snow
+and fog are outdoor-only, while `tunnel_low_light` is tunnel-only.
 
 ## Validation
 

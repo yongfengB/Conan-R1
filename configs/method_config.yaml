@@ -14,6 +14,14 @@ motion:
   native_frame_offset: 1
   elapsed_time_unit: seconds
   representation: [velocity_x, velocity_y, velocity_magnitude]
+  flow_parameters:
+    pyr_scale: 0.5
+    levels: 3
+    winsize: 15
+    iterations: 3
+    poly_n: 5
+    poly_sigma: 1.2
+    flags: 0
   normalization:
     type: training_split_fixed_quantile
     quantile: 0.99
@@ -26,10 +34,14 @@ reliability_pathway:
   max_spatial_tokens: 256
   q_min: 0.05
   reliability_prior_scale: 1.0
-  tau_appearance: 8.0
-  tau_motion: 8.0
+  target_metric: normalized_angular_discrepancy
+  tau_appearance: 0.25
+  tau_motion: 0.25
   ema_decay: 0.999
   dropout: 0.0
+  use_reliability_fusion: true
+  use_event_aware_pooling: true
+  use_temporal_reliability: true
   ordered_tokens: local_then_temporal_per_anchor
   occlusion_adjustment: logged_token_grid_mask
 

@@ -61,6 +61,13 @@ def load_motion_vmax(raw: dict) -> float:
     return value
 
 
+def load_motion_flow_parameters(raw: dict) -> dict:
+    from dataset.video_utils import validate_farneback_parameters
+
+    method = load_config(raw["model"]["method_config"])
+    return validate_farneback_parameters(method["motion"]["flow_parameters"])
+
+
 def build_reliability_config(raw: dict, base_model: str) -> ReliabilityPathwayConfig:
     method_path = Path(raw["model"]["method_config"])
     method = load_config(str(method_path))
@@ -74,6 +81,11 @@ def build_reliability_config(raw: dict, base_model: str) -> ReliabilityPathwayCo
     appearance_dim = int(backbone.vision_config.out_hidden_size)
     output_dim = int(backbone.hidden_size)
     path = method["reliability_pathway"]
+    pathway_override = raw.get("model", {}).get("pathway", {})
+
+    def setting(name: str):
+        return pathway_override.get(name, path[name])
+
     return ReliabilityPathwayConfig(
         appearance_dim=appearance_dim,
         hidden_dim=int(path["hidden_dim"]),
@@ -88,6 +100,9 @@ def build_reliability_config(raw: dict, base_model: str) -> ReliabilityPathwayCo
         tau_motion=float(path["tau_motion"]),
         ema_decay=float(path["ema_decay"]),
         dropout=float(path["dropout"]),
+        use_reliability_fusion=bool(setting("use_reliability_fusion")),
+        use_event_aware_pooling=bool(setting("use_event_aware_pooling")),
+        use_temporal_reliability=bool(setting("use_temporal_reliability")),
     )
 
 
@@ -145,6 +160,9 @@ def main() -> None:
             load_config(model_cfg["method_config"])["degradation_factors"]
             if full_policy
             else None
+        ),
+        motion_flow_parameters=(
+            load_motion_flow_parameters(raw) if full_policy else None
         ),
     )
     initial_checkpoint = model_cfg.get("init_checkpoint")
