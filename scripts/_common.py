@@ -109,22 +109,55 @@ def checkpoint_identity(checkpoint_root: Path) -> Tuple[Optional[str], Dict[str,
     return hashlib.sha256(payload.encode("utf-8")).hexdigest(), components
 
 
+def prediction_rows_sha256(rows: list[dict]) -> str:
+    """Hash ordered raw outputs without depending on derived metric fields."""
+    payload = "\n".join(
+        json.dumps(
+            {
+                **(
+                    {"condition": row.get("condition")}
+                    if "condition" in row
+                    else {}
+                ),
+                "video_id": row.get("video_id"),
+                "raw_output": row.get("raw_output"),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        for row in rows
+    ) + "\n"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def load_core_protocol(checkpoint_root: Path) -> Dict[str, Any]:
     """Read the immutable, non-pickle protocol sidecar for a core checkpoint."""
     path = checkpoint_root / "conan_core_config.json"
     if not path.is_file():
         raise FileNotFoundError(f"Core checkpoint metadata not found: {path}")
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("format_version") != 5:
-        raise ValueError("Only Conan-R1 core checkpoint format version 5 is accepted.")
+    if payload.get("format_version") != 6:
+        raise ValueError("Only Conan-R1 core checkpoint format version 6 is accepted.")
     expected_formula = "exp(-(1-cos(LN(F_d),LN(F_r)))/(2*tau_b))"
     if payload.get("reliability_target_formula") != expected_formula:
         raise ValueError("Core checkpoint does not bind the released Eq. (5) formula.")
     if float(payload.get("motion_v_max", 0.0)) <= 0.0:
         raise ValueError("Core checkpoint has an invalid motion_v_max.")
     from dataset.video_utils import validate_farneback_parameters
+    from model.qwen_adapter import DIAGNOSTIC_SLOT_PROTOCOL
 
     validate_farneback_parameters(payload.get("motion_flow_parameters", {}))
+    preprocessing = payload.get("motion_preprocessing", {})
+    if (
+        int(preprocessing.get("anchors", 0)) < 2
+        or preprocessing.get("frame_size") != [224, 224]
+        or int(preprocessing.get("native_frame_offset", 0)) != 1
+        or preprocessing.get("resize_interpolation") != "opencv_inter_linear"
+    ):
+        raise ValueError("Core checkpoint has an invalid motion preprocessing contract.")
+    if payload.get("diagnostic_slot_protocol") != DIAGNOSTIC_SLOT_PROTOCOL:
+        raise ValueError("Core checkpoint does not bind response-only diagnostic slots.")
     return payload
 
 
@@ -135,7 +168,22 @@ def code_revision() -> Optional[str]:
             check=True,
             capture_output=True,
             text=True,
+            cwd=Path(__file__).resolve().parents[1],
         ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def git_worktree_clean() -> Optional[bool]:
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            check=True,
+            capture_output=True,
+            text=True,
+            cwd=Path(__file__).resolve().parents[1],
+        ).stdout
+        return not bool(status.strip())
     except (OSError, subprocess.CalledProcessError):
         return None
 
@@ -158,6 +206,7 @@ def collect_runtime_metadata(
             for index in range(torch.cuda.device_count())
         ],
         "code_revision": code_revision(),
+        "git_worktree_clean": git_worktree_clean(),
         "command": sys.argv,
     }
     if data_dir:
@@ -174,6 +223,12 @@ def collect_runtime_metadata(
         identity, components = checkpoint_identity(checkpoint_root)
         metadata["checkpoint_identity_sha256"] = identity
         metadata["checkpoint_files_sha256"] = components
+        metadata["resolved_config_sha256"] = sha256_file(
+            checkpoint_root / "resolved_config.yaml"
+        )
+        metadata["training_run_metadata_sha256"] = sha256_file(
+            checkpoint_root / "run_metadata.json"
+        )
     return metadata
 
 

@@ -32,6 +32,7 @@ from scripts._common import (
 
 def load_motion_vmax(raw: dict) -> float:
     method = load_config(raw["model"]["method_config"])
+    data = raw["data"]
     path = Path(method["motion"]["normalization"]["v_max_file"])
     if not path.is_file():
         raise FileNotFoundError(
@@ -41,6 +42,17 @@ def load_motion_vmax(raw: dict) -> float:
     import json
 
     payload = json.loads(path.read_text(encoding="utf-8"))
+    from dataset.video_utils import validate_motion_scale_payload
+
+    value = validate_motion_scale_payload(
+        payload,
+        method,
+        method_config_sha256=str(
+            sha256_file(Path(raw["model"]["method_config"]))
+        ),
+        num_frames=int(data.get("num_frames", 25)),
+        frame_size=int(data.get("frame_size", 224)),
+    )
     data_root = Path(raw["data"]["data_dir"])
     expected = {
         "annotations_sha256": sha256_file(data_root / "annotations.jsonl"),
@@ -59,9 +71,6 @@ def load_motion_vmax(raw: dict) -> float:
         )
     if payload.get("unit") != "pixels_per_second":
         raise ValueError("motion_scale.json must use pixels_per_second.")
-    value = float(payload["v_max"])
-    if not value > 0.0:
-        raise ValueError("motion_scale.json v_max must be positive.")
     return value
 
 
@@ -70,6 +79,15 @@ def load_motion_flow_parameters(raw: dict) -> dict:
 
     method = load_config(raw["model"]["method_config"])
     return validate_farneback_parameters(method["motion"]["flow_parameters"])
+
+
+def load_motion_preprocessing(raw: dict) -> dict:
+    """Return the checkpoint-bound frame geometry used by data and flow."""
+    method = load_config(raw["model"]["method_config"])
+    return {
+        "motion_frame_size": int(method["appearance_encoder"]["frame_size"]),
+        "motion_native_offset": int(method["motion"]["native_frame_offset"]),
+    }
 
 
 def build_reliability_config(raw: dict, base_model: str) -> ReliabilityPathwayConfig:
@@ -147,6 +165,9 @@ def main() -> None:
         split=requested_splits,
         num_frames=int(data_cfg.get("num_frames", 25)),
         frame_size=int(data_cfg.get("frame_size", 224)),
+        motion_native_offset=int(
+            load_motion_preprocessing(raw)["motion_native_offset"]
+        ),
         enabled_blocks=train_cfg.enabled_blocks,
     )
     if not dataset:
@@ -177,6 +198,7 @@ def main() -> None:
         motion_flow_parameters=(
             load_motion_flow_parameters(raw) if full_policy else None
         ),
+        **(load_motion_preprocessing(raw) if full_policy else {}),
     )
     initial_checkpoint = model_cfg.get("init_checkpoint")
     if initial_checkpoint:

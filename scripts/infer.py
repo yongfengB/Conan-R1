@@ -63,11 +63,20 @@ def main() -> None:
         print(f"ERROR: Import failed — {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Load frames
+    core_protocol = load_core_protocol(Path(args.checkpoint))
+    preprocessing = core_protocol["motion_preprocessing"]
+    anchors = int(preprocessing["anchors"])
+    frame_size = int(preprocessing["frame_size"][0])
+    native_offset = int(preprocessing["native_frame_offset"])
+
+    # Load frames with the checkpoint-bound motion preprocessing.
     try:
         fps, frame_count, duration_sec = probe_video(str(video_path))
         frames, motion_frames, motion_pairs = sample_anchor_motion_frames(
-            str(video_path), n=25, size=(224, 224)
+            str(video_path),
+            n=anchors,
+            size=(frame_size, frame_size),
+            offset=native_offset,
         )
     except VideoLoadError as e:
         print(f"ERROR: Cannot read video — {e}", file=sys.stderr)
@@ -75,7 +84,6 @@ def main() -> None:
 
     # Load model
     logger.info("Loading model from checkpoint: %s", args.checkpoint)
-    core_protocol = load_core_protocol(Path(args.checkpoint))
     model = ConanR1Model(
         lora_config=LoRAConfig(),
         base_model=core_protocol["base_model"],
@@ -87,6 +95,8 @@ def main() -> None:
         motion_v_max=float(core_protocol["motion_v_max"]),
         degradation_factor_names=core_protocol["degradation_factor_names"],
         motion_flow_parameters=core_protocol["motion_flow_parameters"],
+        motion_frame_size=frame_size,
+        motion_native_offset=native_offset,
     )
     model.load_core(args.checkpoint, is_trainable=False)
 
@@ -94,7 +104,7 @@ def main() -> None:
     logger.info("Generating structured output...")
     timestamps = [first / fps for first, _ in motion_pairs]
     temporal_prompt = (
-        f"{args.prompt}\nVideo duration: {duration_sec:.3f} seconds. The 25 "
+        f"{args.prompt}\nVideo duration: {duration_sec:.3f} seconds. The {anchors} "
         "frames are uniformly sampled at seconds ["
         + ", ".join(f"{value:.3f}" for value in timestamps)
         + "]. Report temporal boundaries in seconds using interval: "

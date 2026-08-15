@@ -54,6 +54,7 @@ CORE_SCRIPTS = {
     "train_grpo.py",
     "train_sft.py",
     "validate_dataset.py",
+    "verify_paper_results.py",
 }
 CORE_RESULTS = {
     "README.md",

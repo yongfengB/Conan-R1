@@ -27,6 +27,10 @@ motion:
     quantile: 0.99
     v_max_file: data/surv_vau/motion_scale.json
     clip: [-1.0, 1.0]
+    estimation:
+      sampling_method: source_keyed_uniform_without_replacement_v1
+      samples_per_source: 4096
+      seed: 42
 
 reliability_pathway:
   hidden_dim: 256

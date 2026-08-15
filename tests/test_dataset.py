@@ -16,7 +16,11 @@ from dataset.builder import SurvVAUBuilder
 from dataset.dataset import SurvVAUDataset, structured_output_instruction
 from dataset.splitting import stratified_partition
 from dataset.video_utils import (
+    MOTION_SCALE_SAMPLING_METHOD,
+    estimate_training_velocity_scale,
+    motion_scale_contract,
     native_motion_pairs,
+    sample_anchor_motion_frames,
     uniform_sample_indices,
     uniform_sample_timestamps,
 )
@@ -105,6 +109,104 @@ def test_native_motion_pairs_are_adjacent_and_do_not_clip_last_pair():
     assert pairs[0] == (0, 1)
     assert pairs[-1] == (47, 48)
     assert all(second - first == 1 for first, second in pairs)
+
+
+def test_anchor_motion_loader_streams_and_resizes_required_frames(monkeypatch):
+    class Capture:
+        def __init__(self):
+            self.index = 0
+            self.released = False
+
+        def isOpened(self):
+            return True
+
+        def get(self, field):
+            return 30
+
+        def read(self):
+            if self.index >= 30:
+                return False, None
+            frame = np.full((8, 12, 3), self.index, dtype=np.uint8)
+            self.index += 1
+            return True, frame
+
+        def release(self):
+            self.released = True
+
+    capture = Capture()
+    monkeypatch.setattr("dataset.video_utils.cv2.VideoCapture", lambda _: capture)
+    anchors, partners, pairs = sample_anchor_motion_frames(
+        "streamed.mp4", n=5, size=(4, 4), offset=1
+    )
+    assert capture.released is True
+    assert len(anchors) == len(partners) == len(pairs) == 5
+    assert all(frame.shape == (4, 4, 3) for frame in anchors + partners)
+    assert pairs == native_motion_pairs(30, n=5, offset=1)
+
+
+def test_motion_scale_uses_shared_resized_path_and_deterministic_disk_sample(
+    monkeypatch, tmp_path
+):
+    calls = []
+
+    monkeypatch.setattr(
+        "dataset.video_utils.probe_video", lambda _: (25.0, 30, 1.2)
+    )
+
+    def sample(path, n, size, offset):
+        calls.append((path, n, size, offset))
+        frames = [np.zeros((size[1], size[0], 3), dtype=np.uint8) for _ in range(n)]
+        return frames, [frame.copy() for frame in frames], [
+            (index, index + offset) for index in range(n)
+        ]
+
+    def flows(anchors, partners, parameters):
+        values = np.arange(1, len(anchors) * 4 * 4 * 2 + 1, dtype=np.float32)
+        return values.reshape(len(anchors), 4, 4, 2)
+
+    monkeypatch.setattr("dataset.video_utils.sample_anchor_motion_frames", sample)
+    monkeypatch.setattr("dataset.video_utils.dense_farneback_flows", flows)
+    kwargs = dict(
+        n=3,
+        size=(4, 4),
+        offset=1,
+        quantile=0.99,
+        samples_per_source=10,
+        sampling_seed=7,
+        work_dir=str(tmp_path),
+    )
+    first = estimate_training_velocity_scale(
+        [("source-1", "source.mp4", 25.0)], **kwargs
+    )
+    second = estimate_training_velocity_scale(
+        [("source-1", "source.mp4", 25.0)], **kwargs
+    )
+    assert first == second
+    assert first.sampled_values == 10
+    assert calls == [
+        ("source.mp4", 3, (4, 4), 1),
+        ("source.mp4", 3, (4, 4), 1),
+    ]
+    assert MOTION_SCALE_SAMPLING_METHOD == (
+        "source_keyed_uniform_without_replacement_v1"
+    )
+
+
+def test_motion_scale_contract_is_resolved_from_the_method_yaml():
+    import yaml
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    method = yaml.safe_load((root / "configs/method_config.yaml").read_text())
+    contract = motion_scale_contract(method)
+    assert contract["motion_preprocessing"] == {
+        "anchors": 25,
+        "frame_size": [224, 224],
+        "native_frame_offset": 1,
+        "resize_interpolation": "opencv_inter_linear",
+        "flow_parameters": method["motion"]["flow_parameters"],
+    }
+    assert contract["sampling"]["samples_per_source"] == 4096
 
 
 def test_structural_ablation_prompt_omits_removed_blocks():

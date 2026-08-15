@@ -5,7 +5,10 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 from pathlib import Path
+
+from scripts._common import prediction_rows_sha256
 
 
 METRICS = [
@@ -28,26 +31,44 @@ def validate_result_artifact(payload: dict, path: Path) -> None:
     per_sample = payload.get("per_sample")
     if not isinstance(per_sample, list) or not per_sample:
         raise ValueError(f"{path} has no per-sample raw predictions.")
-    if any(not isinstance(row.get("raw_output"), str) for row in per_sample):
+    if any(
+        not isinstance(row.get("raw_output"), str) or not row["raw_output"]
+        for row in per_sample
+    ):
         raise ValueError(f"{path} contains a row without raw_output.")
     provenance = payload.get("provenance", {})
     required_hashes = (
         "annotations_sha256",
         "splits_sha256",
         "split_manifest_sha256",
+        "raw_predictions_sha256",
     )
     missing = [name for name in required_hashes if not provenance.get(name)]
     if missing:
         raise ValueError(f"{path} lacks dataset provenance: {missing}")
-    if not provenance.get("code_revision"):
+    if not re.fullmatch(r"[0-9a-f]{40}", str(provenance.get("code_revision", ""))):
         raise ValueError(
-            f"{path} lacks a Git commit identity; aggregate collection is refused."
+            f"{path} lacks an exact 40-hex Git commit identity."
         )
+    if provenance.get("git_worktree_clean") is not True:
+        raise ValueError(f"{path} was produced from a dirty or unknown worktree.")
+    for name in required_hashes:
+        if not re.fullmatch(r"[0-9a-f]{64}", str(provenance.get(name, ""))):
+            raise ValueError(f"{path} has an invalid {name}.")
+    actual_predictions_hash = prediction_rows_sha256(per_sample)
+    if provenance["raw_predictions_sha256"] != actual_predictions_hash:
+        raise ValueError(f"{path} raw predictions do not match their SHA256.")
     protocol = payload.get("protocol", {})
-    if protocol.get("checkpoint") and not provenance.get(
-        "checkpoint_identity_sha256"
-    ):
-        raise ValueError(f"{path} lacks checkpoint identity.")
+    if protocol.get("artifact_role") != "paper_evidence":
+        raise ValueError(f"{path} is not declared as paper_evidence.")
+    if not protocol.get("checkpoint"):
+        raise ValueError(f"{path} lacks the evaluated checkpoint path.")
+    for name in ("checkpoint_identity_sha256", "resolved_config_sha256"):
+        if not re.fullmatch(r"[0-9a-f]{64}", str(provenance.get(name, ""))):
+            raise ValueError(f"{path} lacks a valid {name}.")
+    components = provenance.get("checkpoint_files_sha256")
+    if not isinstance(components, dict) or not components:
+        raise ValueError(f"{path} lacks checkpoint component hashes.")
 
 
 def main() -> None:

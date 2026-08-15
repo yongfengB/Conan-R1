@@ -22,6 +22,7 @@ from model.reliability_pathway import (
 from scripts._common import (
     collect_runtime_metadata,
     load_core_protocol,
+    prediction_rows_sha256,
     require_dataset,
     resolve_device,
     seed_everything,
@@ -56,19 +57,33 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default=None)
     parser.add_argument("--output", default="results/reliability_interventions.json")
+    parser.add_argument(
+        "--table_id",
+        choices=[f"Table {index}" for index in range(1, 8)],
+        default=None,
+    )
     args = parser.parse_args()
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s"
     )
     require_dataset(args.data_dir)
     seed_everything(args.seed)
-    dataset = SurvVAUDataset(
-        args.data_dir, args.split, args.num_frames, args.frame_size
-    )
     checkpoint = Path(args.checkpoint)
     if not checkpoint.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint}")
     core_protocol = load_core_protocol(checkpoint)
+    preprocessing = core_protocol["motion_preprocessing"]
+    if args.num_frames != int(preprocessing["anchors"]):
+        raise ValueError("--num_frames must match the checkpoint motion protocol.")
+    if args.frame_size != int(preprocessing["frame_size"][0]):
+        raise ValueError("--frame_size must match the checkpoint motion protocol.")
+    dataset = SurvVAUDataset(
+        args.data_dir,
+        args.split,
+        args.num_frames,
+        args.frame_size,
+        motion_native_offset=int(preprocessing["native_frame_offset"]),
+    )
     model = ConanR1Model(
         args.base_model,
         base_model_revision=args.base_model_revision,
@@ -80,6 +95,8 @@ def main() -> None:
         motion_v_max=float(core_protocol["motion_v_max"]),
         degradation_factor_names=core_protocol["degradation_factor_names"],
         motion_flow_parameters=core_protocol["motion_flow_parameters"],
+        motion_frame_size=int(preprocessing["frame_size"][0]),
+        motion_native_offset=int(preprocessing["native_frame_offset"]),
     )
     model.load_core(args.checkpoint, is_trainable=False)
 
@@ -130,8 +147,21 @@ def main() -> None:
         for condition, result in evaluations.items()
         if condition != "predicted"
     }
+    result_rows = [
+        {**row, "condition": condition}
+        for condition, result in evaluations.items()
+        for row in result["per_sample"]
+    ]
+    provenance = collect_runtime_metadata(
+        data_dir=args.data_dir, checkpoint=args.checkpoint
+    )
+    provenance["raw_predictions_sha256"] = prediction_rows_sha256(result_rows)
     payload = {
         "protocol": {
+            "artifact_role": (
+                "paper_evidence" if args.table_id else "audit_only"
+            ),
+            "table_id": args.table_id,
             "checkpoint": args.checkpoint,
             "base_model": args.base_model,
             "base_model_revision": args.base_model_revision,
@@ -144,10 +174,9 @@ def main() -> None:
             "interpretation": "decision-pathway intervention, not probability calibration",
         },
         "evaluations": evaluations,
+        "per_sample": result_rows,
         "delta_from_predicted": deltas,
-        "provenance": collect_runtime_metadata(
-            data_dir=args.data_dir, checkpoint=args.checkpoint
-        ),
+        "provenance": provenance,
     }
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

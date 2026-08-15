@@ -67,6 +67,7 @@ class SurvVAUDataset(Dataset):
         split: Union[str, Sequence[str]],
         num_frames: int = 25,
         frame_size: int = 224,
+        motion_native_offset: int = 1,
         require_videos: bool = True,
         enabled_blocks=BLOCK_ORDER,
         force_joint_task: bool = False,
@@ -82,6 +83,9 @@ class SurvVAUDataset(Dataset):
         self.split = "+".join(self.splits)
         self.num_frames = num_frames
         self.frame_size = frame_size
+        self.motion_native_offset = int(motion_native_offset)
+        if self.motion_native_offset < 1:
+            raise ValueError("motion_native_offset must be positive.")
         self.require_videos = require_videos
         self.enabled_blocks = tuple(str(block).upper() for block in enabled_blocks)
         self.force_joint_task = bool(force_joint_task)
@@ -157,7 +161,10 @@ class SurvVAUDataset(Dataset):
 
         if video_path.exists():
             frames, motion_frames, motion_pairs = sample_anchor_motion_frames(
-                str(video_path), n=self.num_frames, size=(self.frame_size, self.frame_size)
+                str(video_path),
+                n=self.num_frames,
+                size=(self.frame_size, self.frame_size),
+                offset=self.motion_native_offset,
             )
         else:
             # Metadata-only callers may opt out of strict video validation.
@@ -167,7 +174,10 @@ class SurvVAUDataset(Dataset):
             ]
             motion_frames = [frame.copy() for frame in frames]
             motion_pairs = [
-                (index, min(index + 1, self.num_frames - 1))
+                (
+                    index,
+                    min(index + self.motion_native_offset, self.num_frames - 1),
+                )
                 for index in range(self.num_frames)
             ]
 
@@ -182,6 +192,7 @@ class SurvVAUDataset(Dataset):
                     str(source_path),
                     n=self.num_frames,
                     size=(self.frame_size, self.frame_size),
+                    offset=self.motion_native_offset,
                 )
             )
         else:
@@ -277,7 +288,9 @@ class SurvVAUDataset(Dataset):
         timestamps = [
             first / float(obj["fps"])
             for first, _ in native_motion_pairs(
-                int(obj["num_source_frames"]), self.num_frames
+                int(obj["num_source_frames"]),
+                self.num_frames,
+                offset=self.motion_native_offset,
             )
         ]
         timestamp_text = ", ".join(f"{value:.3f}" for value in timestamps)

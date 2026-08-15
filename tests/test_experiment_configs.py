@@ -115,6 +115,16 @@ def test_method_config_pins_paper_eq5_metric_formula_and_temperatures():
     assert pathway["target_formula"] == RELIABILITY_TARGET_FORMULA
     assert pathway["tau_appearance"] == pytest.approx(0.25)
     assert pathway["tau_motion"] == pytest.approx(0.25)
+    motion = config["motion"]
+    assert config["appearance_encoder"]["anchors"] == 25
+    assert config["appearance_encoder"]["frame_size"] == 224
+    assert motion["native_frame_offset"] == 1
+    assert motion["normalization"]["quantile"] == pytest.approx(0.99)
+    assert motion["normalization"]["estimation"] == {
+        "sampling_method": "source_keyed_uniform_without_replacement_v1",
+        "samples_per_source": 4096,
+        "seed": 42,
+    }
 
 
 @pytest.mark.parametrize(

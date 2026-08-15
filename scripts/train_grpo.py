@@ -16,6 +16,7 @@ from training.grpo_trainer import GRPOConfig, GRPOTrainer
 from scripts.train_sft import (
     build_reliability_config,
     load_motion_flow_parameters,
+    load_motion_preprocessing,
     load_motion_vmax,
 )
 from scripts._common import (
@@ -57,6 +58,9 @@ def main() -> None:
         split=data_cfg.get("split", "rl_train"),
         num_frames=int(data_cfg.get("num_frames", 25)),
         frame_size=int(data_cfg.get("frame_size", 224)),
+        motion_native_offset=int(
+            load_motion_preprocessing(raw)["motion_native_offset"]
+        ),
         force_joint_task=not train_cfg.task_masking,
     )
     if not dataset:
@@ -88,6 +92,7 @@ def main() -> None:
         motion_v_max=motion_v_max,
         degradation_factor_names=factor_names,
         motion_flow_parameters=(load_motion_flow_parameters(raw) if use_pathway else None),
+        **(load_motion_preprocessing(raw) if use_pathway else {}),
     )
     if checkpoint:
         if use_pathway:
@@ -103,6 +108,7 @@ def main() -> None:
         motion_v_max=motion_v_max,
         degradation_factor_names=factor_names,
         motion_flow_parameters=(load_motion_flow_parameters(raw) if use_pathway else None),
+        **(load_motion_preprocessing(raw) if use_pathway else {}),
     )
     if checkpoint:
         if use_pathway:

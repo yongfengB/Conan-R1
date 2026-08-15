@@ -22,6 +22,133 @@ from .reliability_pathway import (
 )
 
 
+DIAGNOSTIC_MARKERS = ("<TYPE>", "<INFLUENCE>")
+DIAGNOSTIC_SLOT_PROTOCOL = "label_mask_response_fast_offsets_v1"
+
+
+class DiagnosticSlotError(RuntimeError):
+    """Raised when a diagnostic slot cannot be resolved inside the response."""
+
+
+def response_only_labels(
+    tokenizer: Any,
+    response: str,
+    eos_text: str,
+    input_ids: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Mask the prompt by aligning the complete response suffix exactly."""
+    if input_ids.ndim != 2 or input_ids.shape[0] != 1:
+        raise DiagnosticSlotError("Response label construction requires [1, L] ids.")
+    expected = tokenizer(
+        response + eos_text, add_special_tokens=False
+    )["input_ids"]
+    if expected and isinstance(expected[0], list):
+        expected = expected[0]
+    if not expected:
+        raise DiagnosticSlotError("The tokenizer produced no response target ids.")
+    if attention_mask is None:
+        active_positions = torch.arange(input_ids.shape[1], device=input_ids.device)
+    else:
+        if attention_mask.shape != input_ids.shape:
+            raise DiagnosticSlotError("attention_mask must align with input_ids.")
+        active_positions = torch.nonzero(
+            attention_mask[0].ne(0), as_tuple=False
+        ).flatten()
+    if len(expected) > active_positions.numel():
+        raise DiagnosticSlotError("The response target is longer than the active sequence.")
+    response_positions = active_positions[-len(expected) :]
+    actual = input_ids[0, response_positions].tolist()
+    if actual != list(expected):
+        raise DiagnosticSlotError(
+            "Full processor ids do not end with the exact response target."
+        )
+    labels = torch.full_like(input_ids, -100)
+    labels[0, response_positions] = input_ids[0, response_positions]
+    return labels
+
+
+def response_marker_hidden_positions(
+    tokenizer: Any,
+    response: str,
+    input_ids: torch.Tensor,
+    labels: torch.Tensor,
+    markers: tuple[str, ...] = DIAGNOSTIC_MARKERS,
+) -> dict[str, int]:
+    """Map response marker ends to decoder positions using fast-tokenizer offsets.
+
+    ``labels`` is the authoritative prompt/response boundary: only positions whose
+    labels are not ``-100`` can own a diagnostic slot.  The complete response is
+    tokenized once, so context-sensitive BPE merges between adjacent structured
+    blocks are preserved; isolated marker token ids are never searched.
+    """
+    if input_ids.ndim != 2 or labels.ndim != 2 or input_ids.shape != labels.shape:
+        raise DiagnosticSlotError(
+            "input_ids and labels must have the same batch-one [1, L] shape."
+        )
+    if input_ids.shape[0] != 1:
+        raise DiagnosticSlotError("Diagnostic slot extraction requires batch size one.")
+    response_positions = torch.nonzero(labels[0].ne(-100), as_tuple=False).flatten()
+    if response_positions.numel() == 0:
+        raise DiagnosticSlotError("The label mask contains no supervised response tokens.")
+    encoded = tokenizer(
+        response,
+        add_special_tokens=False,
+        return_offsets_mapping=True,
+    )
+    if "offset_mapping" not in encoded:
+        raise DiagnosticSlotError(
+            "A fast tokenizer with return_offsets_mapping support is required."
+        )
+    response_ids = list(encoded["input_ids"])
+    offsets = [tuple(int(value) for value in pair) for pair in encoded["offset_mapping"]]
+    if response_ids and isinstance(response_ids[0], list):
+        if len(response_ids) != 1:
+            raise DiagnosticSlotError("Response tokenization must produce one sequence.")
+        response_ids = response_ids[0]
+        offsets = offsets[0]
+    if not response_ids or len(response_ids) != len(offsets):
+        raise DiagnosticSlotError("Response ids and character offsets are empty or misaligned.")
+    if len(response_ids) > response_positions.numel():
+        raise DiagnosticSlotError(
+            "The label mask is shorter than the independently tokenized response."
+        )
+    labelled_ids = input_ids[0, response_positions[: len(response_ids)]].tolist()
+    if labelled_ids != response_ids:
+        raise DiagnosticSlotError(
+            "The label mask does not begin at the exact response-token boundary."
+        )
+
+    positions: dict[str, int] = {}
+    for marker in markers:
+        starts = [
+            index
+            for index in range(len(response))
+            if response.startswith(marker, index)
+        ]
+        if len(starts) != 1:
+            raise DiagnosticSlotError(
+                f"Expected one {marker} marker in the supervised response, "
+                f"found {len(starts)}."
+            )
+        marker_end = starts[0] + len(marker)
+        relative_slot = next(
+            (
+                index
+                for index, (start, end) in enumerate(offsets)
+                if end > start
+                and (start >= marker_end or start <= marker_end < end)
+            ),
+            None,
+        )
+        if relative_slot is None:
+            raise DiagnosticSlotError(
+                f"No decoder token follows the {marker} marker in the response."
+            )
+        positions[marker] = int(response_positions[relative_slot].item())
+    return positions
+
+
 def image_token_runs(input_ids: torch.Tensor, image_token_id: int) -> list[tuple[int, int]]:
     """Return half-open contiguous image-token runs for a batch-one prompt."""
     if input_ids.ndim != 2 or input_ids.shape[0] != 1:

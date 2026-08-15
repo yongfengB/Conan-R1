@@ -16,7 +16,11 @@ from evaluation.robustness import (
     summarize_robustness,
     validate_robustness_coverage,
 )
-from scripts._common import collect_runtime_metadata, sha256_file
+from scripts._common import (
+    collect_runtime_metadata,
+    prediction_rows_sha256,
+    sha256_file,
+)
 
 
 def main() -> None:
@@ -75,8 +79,22 @@ def main() -> None:
         if args.require_complete_robustness and not args.wts
         else None
     )
+    result_rows = [
+        {**row, "raw_output": raw_output}
+        for row, raw_output in zip(details, predictions)
+    ]
+    provenance = collect_runtime_metadata(data_dir=args.data_dir)
+    provenance.update(
+        {
+            "raw_predictions_file_sha256": sha256_file(
+                Path(args.predictions_jsonl)
+            ),
+            "raw_predictions_sha256": prediction_rows_sha256(result_rows),
+        }
+    )
     payload = {
         "protocol": {
+            "artifact_role": "audit_only",
             "model_name": args.model_name or Path(args.predictions_jsonl).stem,
             "prediction_file": args.predictions_jsonl,
             "split": args.split,
@@ -86,16 +104,8 @@ def main() -> None:
         "metrics": metrics,
         "robustness": {} if args.wts else summarize_robustness(details),
         "robustness_coverage": coverage,
-        "per_sample": [
-            {**row, "raw_output": raw_output}
-            for row, raw_output in zip(details, predictions)
-        ],
-        "provenance": {
-            **collect_runtime_metadata(data_dir=args.data_dir),
-            "predictions_sha256": sha256_file(
-                Path(args.predictions_jsonl)
-            ),
-        },
+        "per_sample": result_rows,
+        "provenance": provenance,
     }
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

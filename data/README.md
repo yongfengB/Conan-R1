@@ -94,5 +94,9 @@ provider.
 A granted data release must include the matching `annotations.jsonl`,
 `splits.json`, `split_manifest.json`, paired source videos, and training-split
 `motion_scale.json`. The code refuses reliability training when the source pair
-or fixed motion scale is absent. Large checkpoints are not bundled here; they
+or fixed motion scale is absent. Its schema version 2 binds 25 anchors, the
+224×224 resize, native offset one, every Farnebäck parameter, quantile 0.99,
+and the deterministic source-keyed sampling seed/count. Estimation streams
+only the required resized frames and stores sampled velocities in a temporary
+disk-backed array. Large checkpoints are not bundled here; they
 can be rebuilt with the frozen YAML files and commands in the root README.

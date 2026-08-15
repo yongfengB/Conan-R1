@@ -128,7 +128,12 @@ extra time expressions.
   formula-mismatched method configurations;
 - 25 uniformly sampled RGB frames, resized to 224 by 224;
 - native adjacent-frame motion divided by elapsed seconds and a fixed
-  training-split `v_max`;
+  training-split `v_max`; scale fitting reuses the same resized-anchor and
+  Farnebäck functions, streams one source at a time, and applies the recorded
+  source-keyed deterministic pixel sample;
+- diagnostic decoder slots are resolved only inside label-masked response
+  tokens with fast-tokenizer character offsets; prompt markers are excluded,
+  and invalid GRPO structures mask the undefined consistency term;
 - frozen Qwen appearance encoder, frozen reference flow estimator, and EMA
   motion teacher with decay `0.999`;
 - LoRA rank 16, alpha 32, dropout 0.05;
@@ -223,21 +228,26 @@ python scripts/evaluate.py \
   --data_dir data/surv_vau \
   --split test \
   --robustness_scope synthetic \
+  --table_id "Table 1" \
   --output results/conan_r1.json
 
 python scripts/evaluate_interventions.py \
   --checkpoint checkpoints/grpo_full \
   --data_dir data/surv_vau \
   --split test \
+  --table_id "Table 7" \
   --output results/interventions.json
+
+python scripts/verify_paper_results.py results/paper_results_manifest.json
 ```
 
 Every evaluation JSON records raw per-sample outputs and resolves the Git
 revision, annotation hash, split hash, checkpoint hash, environment, command,
 and decoding protocol at runtime.
 
-Core checkpoint protocol version 5 binds the Eq. (5) metric, formula,
-temperatures, flow parameters, and the complete reliability-pathway config.
+Core checkpoint protocol version 6 binds the Eq. (5) metric, formula,
+temperatures, the exact resized motion path, response-only diagnostic slots,
+and the complete reliability-pathway config.
 
 ## Tests and manuscript parity
 

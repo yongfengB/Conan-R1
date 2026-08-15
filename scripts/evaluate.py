@@ -22,6 +22,7 @@ from model.reliability_pathway import ReliabilityPathwayConfig
 from scripts._common import (
     collect_runtime_metadata,
     load_core_protocol,
+    prediction_rows_sha256,
     require_dataset,
     resolve_device,
     seed_everything,
@@ -65,27 +66,48 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--output", default="results/evaluation.json")
+    parser.add_argument(
+        "--table_id",
+        choices=[f"Table {index}" for index in range(1, 8)],
+        default=None,
+        help="Declare paper evidence only when binding this run to a table.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.table_id and not args.checkpoint:
+        raise ValueError("Paper evidence requires --checkpoint identity.")
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s"
     )
     require_dataset(args.data_dir)
     seed_everything(args.seed)
-    dataset = SurvVAUDataset(
-        args.data_dir, args.split, args.num_frames, args.frame_size
-    )
-    if not dataset:
-        raise RuntimeError(f"The {args.split} split contains no samples.")
-
     core_protocol = (
         load_core_protocol(Path(args.checkpoint))
         if args.checkpoint and args.checkpoint_type == "core"
         else None
     )
+    if core_protocol is not None:
+        preprocessing = core_protocol["motion_preprocessing"]
+        if args.num_frames != int(preprocessing["anchors"]):
+            raise ValueError("--num_frames must match the checkpoint motion protocol.")
+        if args.frame_size != int(preprocessing["frame_size"][0]):
+            raise ValueError("--frame_size must match the checkpoint motion protocol.")
+    dataset = SurvVAUDataset(
+        args.data_dir,
+        args.split,
+        args.num_frames,
+        args.frame_size,
+        motion_native_offset=(
+            int(core_protocol["motion_preprocessing"]["native_frame_offset"])
+            if core_protocol is not None
+            else 1
+        ),
+    )
+    if not dataset:
+        raise RuntimeError(f"The {args.split} split contains no samples.")
     model = ConanR1Model(
         args.base_model,
         base_model_revision=args.base_model_revision,
@@ -110,6 +132,16 @@ def main() -> None:
             core_protocol["motion_flow_parameters"]
             if core_protocol is not None
             else None
+        ),
+        motion_frame_size=(
+            int(core_protocol["motion_preprocessing"]["frame_size"][0])
+            if core_protocol is not None
+            else 224
+        ),
+        motion_native_offset=(
+            int(core_protocol["motion_preprocessing"]["native_frame_offset"])
+            if core_protocol is not None
+            else 1
         ),
     )
     if args.checkpoint:
@@ -166,12 +198,24 @@ def main() -> None:
             per_sample, required_domains=required_domains
         )
     robustness = summarize_robustness(per_sample) if robustness_enabled else {}
+    result_rows = [
+        {**row, "raw_output": raw_output}
+        for row, raw_output in zip(per_sample, predictions)
+    ]
+    provenance = collect_runtime_metadata(
+        data_dir=args.data_dir, checkpoint=args.checkpoint
+    )
+    provenance["raw_predictions_sha256"] = prediction_rows_sha256(result_rows)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with open(output, "w", encoding="utf-8") as handle:
         json.dump(
             {
                 "protocol": {
+                    "artifact_role": (
+                        "paper_evidence" if args.table_id else "audit_only"
+                    ),
+                    "table_id": args.table_id,
                     "model_name": args.model_name,
                     "checkpoint": args.checkpoint,
                     "checkpoint_type": args.checkpoint_type,
@@ -191,13 +235,8 @@ def main() -> None:
                 "metrics": metrics,
                 "robustness_coverage": coverage,
                 "robustness": robustness,
-                "provenance": collect_runtime_metadata(
-                    data_dir=args.data_dir, checkpoint=args.checkpoint
-                ),
-                "per_sample": [
-                    {**row, "raw_output": raw_output}
-                    for row, raw_output in zip(per_sample, predictions)
-                ],
+                "provenance": provenance,
+                "per_sample": result_rows,
             },
             handle,
             indent=2,

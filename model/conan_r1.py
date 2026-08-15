@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from PIL import Image
 from dataset.video_utils import (
     FARNEBACK_PARAMETERS,
-    farneback_pair_flow,
+    dense_farneback_flows,
     validate_farneback_parameters,
 )
 from peft import LoraConfig, PeftModel, get_peft_model
@@ -28,11 +28,18 @@ from .reliability_pathway import (
     ReliabilityAwarePathway,
     ReliabilityPathwayConfig,
 )
-from .qwen_adapter import QwenReliabilityAdapter, pool_flow_to_token_grid
+from .qwen_adapter import (
+    DIAGNOSTIC_SLOT_PROTOCOL,
+    DiagnosticSlotError,
+    QwenReliabilityAdapter,
+    pool_flow_to_token_grid,
+    response_marker_hidden_positions,
+    response_only_labels,
+)
 
 logger = logging.getLogger(__name__)
 QWEN_BASE_REVISION = "c747f21f03e7d0792c30766310bd7d8de17eeeb3"
-CORE_CHECKPOINT_FORMAT_VERSION = 5
+CORE_CHECKPOINT_FORMAT_VERSION = 6
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +91,8 @@ class ConanR1Model:
         motion_v_max: Optional[float] = None,
         degradation_factor_names: Optional[List[str]] = None,
         motion_flow_parameters: Optional[dict] = None,
+        motion_frame_size: int = 224,
+        motion_native_offset: int = 1,
     ) -> None:
         self.base_model_name = base_model
         self.base_model_revision = base_model_revision
@@ -117,6 +126,10 @@ class ConanR1Model:
         self.motion_flow_parameters = validate_farneback_parameters(
             motion_flow_parameters or FARNEBACK_PARAMETERS
         )
+        self.motion_frame_size = int(motion_frame_size)
+        self.motion_native_offset = int(motion_native_offset)
+        if self.motion_frame_size < 1 or self.motion_native_offset < 1:
+            raise ValueError("Motion frame size and native offset must be positive.")
         self.degradation_factor_names = list(degradation_factor_names or [])
         if reliability_config is not None:
             if len(self.degradation_factor_names) != reliability_config.num_factors:
@@ -308,14 +321,16 @@ class ConanR1Model:
     def _dense_flow(
         self, frames: List[np.ndarray], motion_frames: List[np.ndarray]
     ) -> torch.Tensor:
-        if len(frames) != len(motion_frames) or not frames:
-            raise ValueError("Each anchor needs one adjacent native-rate motion frame.")
-        flows = []
-        for first, second in zip(frames, motion_frames):
-            flows.append(
-                farneback_pair_flow(first, second, self.motion_flow_parameters)
+        expected = (self.motion_frame_size, self.motion_frame_size)
+        if any(frame.shape[:2] != expected for frame in [*frames, *motion_frames]):
+            raise ValueError(
+                "Motion frames must match the checkpoint-bound resized frame size "
+                f"{expected}."
             )
-        return torch.from_numpy(np.stack(flows).astype(np.float32))[None]
+        flows = dense_farneback_flows(
+            frames, motion_frames, self.motion_flow_parameters
+        )
+        return torch.from_numpy(flows)[None]
 
     def _adapt_reliability_inputs(
         self,
@@ -399,6 +414,13 @@ class ConanR1Model:
             "reliability_target_formula": RELIABILITY_TARGET_FORMULA,
             "motion_v_max": float(self.motion_v_max),
             "motion_flow_parameters": self.motion_flow_parameters,
+            "motion_preprocessing": {
+                "anchors": int(self.reliability_pathway.config.max_anchors),
+                "frame_size": [self.motion_frame_size, self.motion_frame_size],
+                "native_frame_offset": self.motion_native_offset,
+                "resize_interpolation": "opencv_inter_linear",
+            },
+            "diagnostic_slot_protocol": DIAGNOSTIC_SLOT_PROTOCOL,
             "degradation_factor_names": list(self.degradation_factor_names),
         }
         (Path(checkpoint_path) / "conan_core_config.json").write_text(
@@ -427,7 +449,7 @@ class ConanR1Model:
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         if metadata.get("format_version") != CORE_CHECKPOINT_FORMAT_VERSION:
             raise ValueError(
-                "Core checkpoint lacks the v5 equation- and flow-bound protocol metadata; it cannot be "
+                "Core checkpoint lacks the v6 motion- and diagnostic-bound protocol metadata; it cannot be "
                 "safely matched to the revised method."
             )
         expected = {
@@ -438,6 +460,13 @@ class ConanR1Model:
             "reliability_target_formula": RELIABILITY_TARGET_FORMULA,
             "motion_v_max": float(self.motion_v_max),
             "motion_flow_parameters": self.motion_flow_parameters,
+            "motion_preprocessing": {
+                "anchors": int(self.reliability_pathway.config.max_anchors),
+                "frame_size": [self.motion_frame_size, self.motion_frame_size],
+                "native_frame_offset": self.motion_native_offset,
+                "resize_interpolation": "opencv_inter_linear",
+            },
+            "diagnostic_slot_protocol": DIAGNOSTIC_SLOT_PROTOCOL,
             "degradation_factor_names": list(self.degradation_factor_names),
         }
         mismatches = {
@@ -652,24 +681,19 @@ class ConanR1Model:
         )
         eos = self.processor.tokenizer.eos_token or ""
         full_text = text + response + eos
-        prompt_inputs = self.processor(
-            text=[text],
-            images=pil_images or None,
-            return_tensors="pt",
-            padding=True,
-        )
         inputs = self.processor(
             text=[full_text],
             images=pil_images or None,
             return_tensors="pt",
             padding=True,
         ).to(self.device)
-        prompt_len = prompt_inputs["input_ids"].shape[1]
-        labels = inputs["input_ids"].clone()
-        labels[:, :prompt_len] = -100
-        if "attention_mask" in inputs:
-            labels[inputs["attention_mask"] == 0] = -100
-        inputs["labels"] = labels
+        inputs["labels"] = response_only_labels(
+            self.processor.tokenizer,
+            response,
+            eos,
+            inputs["input_ids"],
+            inputs.get("attention_mask"),
+        )
         inputs, adapted = self._adapt_reliability_inputs(
             inputs,
             frames,
@@ -700,6 +724,7 @@ class ConanR1Model:
         prompt: str,
         response: str,
         require_diagnostic_slots: bool = True,
+        diagnostic_slots_strict: bool = True,
         **visual_context,
     ):
         """Return LM loss and the exact reliability state used by the decoder."""
@@ -712,7 +737,13 @@ class ConanR1Model:
             **inputs, output_hidden_states=require_diagnostic_slots
         )
         if require_diagnostic_slots:
-            self._attach_diagnostic_slots(adapted, outputs.hidden_states[-1])
+            self._attach_diagnostic_slots(
+                adapted,
+                outputs.hidden_states[-1],
+                response,
+                inputs["labels"],
+                strict=diagnostic_slots_strict,
+            )
         return outputs.loss, adapted
 
     def response_token_log_probs(
@@ -754,6 +785,7 @@ class ConanR1Model:
         response: str,
         require_grad: bool = True,
         require_diagnostic_slots: bool = True,
+        diagnostic_slots_strict: bool = True,
         **visual_context,
     ):
         """Return response-token log probabilities and the policy visual state."""
@@ -770,7 +802,13 @@ class ConanR1Model:
                 **inputs, output_hidden_states=require_diagnostic_slots
             )
             if require_diagnostic_slots:
-                self._attach_diagnostic_slots(adapted, outputs.hidden_states[-1])
+                self._attach_diagnostic_slots(
+                    adapted,
+                    outputs.hidden_states[-1],
+                    response,
+                    labels,
+                    strict=diagnostic_slots_strict,
+                )
             shift_logits = outputs.logits[:, :-1, :]
             shift_labels = labels[:, 1:]
             valid = shift_labels.ne(-100)
@@ -782,29 +820,44 @@ class ConanR1Model:
             ).view_as(safe_labels)
         return token_log_probs[valid], adapted
 
-    def _attach_diagnostic_slots(self, adapted, hidden_states: torch.Tensor) -> None:
-        """Select decoder states immediately after the two opening tags."""
+    def _attach_diagnostic_slots(
+        self,
+        adapted,
+        hidden_states: torch.Tensor,
+        response: str,
+        labels: torch.Tensor,
+        *,
+        strict: bool = True,
+    ) -> bool:
+        """Attach response-only TYPE/INFLUENCE states from character offsets."""
+        try:
+            positions = response_marker_hidden_positions(
+                self.processor.tokenizer,
+                response,
+                adapted.input_ids,
+                labels,
+            )
+        except DiagnosticSlotError as error:
+            malformed_response = str(error).startswith("Expected one ") or str(
+                error
+            ).startswith("No decoder token follows ")
+            if strict or not malformed_response:
+                raise
+            adapted.type_decoder_slot = None
+            adapted.influence_decoder_slot = None
+            return False
         for tag, attribute in (
             ("<TYPE>", "type_decoder_slot"),
             ("<INFLUENCE>", "influence_decoder_slot"),
         ):
-            token_ids = self.processor.tokenizer(
-                tag, add_special_tokens=False
-            )["input_ids"]
-            if not token_ids:
-                raise RuntimeError(f"Tokenizer produced no ids for diagnostic tag {tag}.")
-            sequence = adapted.input_ids[0].tolist()
-            matches = [
-                index
-                for index in range(len(sequence) - len(token_ids) + 1)
-                if sequence[index : index + len(token_ids)] == token_ids
-            ]
-            if len(matches) != 1:
-                raise RuntimeError(
-                    f"Expected one {tag} marker in the supervised response, found {len(matches)}."
+            position = positions[tag]
+            if position >= hidden_states.shape[1]:
+                raise DiagnosticSlotError(
+                    f"Resolved {tag} position {position} exceeds decoder length "
+                    f"{hidden_states.shape[1]}."
                 )
-            slot = min(matches[0] + len(token_ids), hidden_states.shape[1] - 1)
-            setattr(adapted, attribute, hidden_states[:, slot, :])
+            setattr(adapted, attribute, hidden_states[:, position, :])
+        return True
 
     def log_prob(
         self,

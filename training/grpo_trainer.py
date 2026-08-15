@@ -453,6 +453,7 @@ class GRPOTrainer:
                                 self.config.preserve_during_grpo
                                 and self.config.lambda_c_rl > 0.0
                             ),
+                            diagnostic_slots_strict=False,
                             **visual_context,
                         )
                     )
@@ -492,7 +493,11 @@ class GRPOTrainer:
                         factor_severity=severity,
                         occlusion_token_mask=mask,
                         timestamps=timestamps,
-                        compute_consistency=self.config.lambda_c_rl > 0.0,
+                        compute_consistency=(
+                            self.config.lambda_c_rl > 0.0
+                            and degraded_state.type_decoder_slot is not None
+                            and degraded_state.influence_decoder_slot is not None
+                        ),
                         motion_target_mode=self.config.reliability_target,
                         occlusion_mask_adjustment=(
                             self.config.occlusion_mask_adjustment
@@ -509,6 +514,12 @@ class GRPOTrainer:
                             self.config.lambda_c_rl,
                         ),
                     ).total
+                    diagnostics["consistency_applied"] = loss.new_tensor(
+                        float(
+                            degraded_state.type_decoder_slot is not None
+                            and degraded_state.influence_decoder_slot is not None
+                        )
+                    )
                 require_finite(loss, "GRPO loss")
                 self.scaler.scale(loss / len(candidates)).backward()
                 update_losses.append(loss.detach())
@@ -550,6 +561,11 @@ class GRPOTrainer:
             "clip_fraction": mean_tensor("clip_fraction"),
             "approx_kl": mean_tensor("approx_kl"),
             "policy_objective": mean_tensor("policy_objective"),
+            "consistency_applied_fraction": (
+                mean_tensor("consistency_applied")
+                if "consistency_applied" in diagnostic_rows[0]
+                else 0.0
+            ),
         }
 
     @staticmethod
