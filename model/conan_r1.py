@@ -24,6 +24,7 @@ from .parser import StructuredOutput, parse_structured_output
 from .reliability_pathway import (
     DiagnosticConsistencyReadouts,
     EMAMotionTeacher,
+    RELIABILITY_TARGET_FORMULA,
     ReliabilityAwarePathway,
     ReliabilityPathwayConfig,
 )
@@ -31,6 +32,7 @@ from .qwen_adapter import QwenReliabilityAdapter, pool_flow_to_token_grid
 
 logger = logging.getLogger(__name__)
 QWEN_BASE_REVISION = "c747f21f03e7d0792c30766310bd7d8de17eeeb3"
+CORE_CHECKPOINT_FORMAT_VERSION = 5
 
 
 # ---------------------------------------------------------------------------
@@ -390,10 +392,11 @@ class ConanR1Model:
             raise RuntimeError("Cannot save a full core checkpoint without visual modules.")
         metadata = {
             "method": "conan-r1-source-relative-reliability-v2",
-            "format_version": 4,
+            "format_version": CORE_CHECKPOINT_FORMAT_VERSION,
             "base_model": self.base_model_name,
             "base_model_revision": self.base_model_revision,
             "reliability_config": asdict(self.reliability_pathway.config),
+            "reliability_target_formula": RELIABILITY_TARGET_FORMULA,
             "motion_v_max": float(self.motion_v_max),
             "motion_flow_parameters": self.motion_flow_parameters,
             "degradation_factor_names": list(self.degradation_factor_names),
@@ -422,9 +425,9 @@ class ConanR1Model:
         if self.reliability_pathway is None or self.consistency_readouts is None:
             raise RuntimeError("Attach the configured reliability pathway before loading.")
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        if metadata.get("format_version") != 4:
+        if metadata.get("format_version") != CORE_CHECKPOINT_FORMAT_VERSION:
             raise ValueError(
-                "Core checkpoint lacks the v4 flow-bound protocol metadata; it cannot be "
+                "Core checkpoint lacks the v5 equation- and flow-bound protocol metadata; it cannot be "
                 "safely matched to the revised method."
             )
         expected = {
@@ -432,6 +435,7 @@ class ConanR1Model:
             "base_model": self.base_model_name,
             "base_model_revision": self.base_model_revision,
             "reliability_config": asdict(self.reliability_pathway.config),
+            "reliability_target_formula": RELIABILITY_TARGET_FORMULA,
             "motion_v_max": float(self.motion_v_max),
             "motion_flow_parameters": self.motion_flow_parameters,
             "degradation_factor_names": list(self.degradation_factor_names),

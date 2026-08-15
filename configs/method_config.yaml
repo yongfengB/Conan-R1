@@ -34,7 +34,8 @@ reliability_pathway:
   max_spatial_tokens: 256
   q_min: 0.05
   reliability_prior_scale: 1.0
-  target_metric: normalized_angular_discrepancy
+  target_metric: layernorm_cosine_angular_discrepancy
+  target_formula: "exp(-(1-cos(LN(F_d),LN(F_r)))/(2*tau_b))"
   tau_appearance: 0.25
   tau_motion: 0.25
   ema_decay: 0.999

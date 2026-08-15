@@ -1,6 +1,7 @@
 """Tensor-level reference implementation of the Conan-R1 visual pathway.
 
-This module implements Eqs. (6)--(20) of the revised manuscript without
+This module implements the reliability target in Eq. (5) and the downstream
+visual pathway of the revised manuscript without
 depending on a particular video decoder or language backbone.  The appearance
 tokens are expected to come from a frozen visual encoder.  Optical flow is
 estimated outside this module and supplied at its native frame interval; the
@@ -27,6 +28,12 @@ RELIABILITY_INTERVENTIONS = {
     "branch_swap",
 }
 
+# Machine-readable identifiers for the exact paper target.  Checkpoint and
+# training-config validation use these values so an L2 target cannot be labeled
+# as the released cosine target.
+RELIABILITY_TARGET_METRIC = "layernorm_cosine_angular_discrepancy"
+RELIABILITY_TARGET_FORMULA = "exp(-(1-cos(LN(F_d),LN(F_r)))/(2*tau_b))"
+
 
 @dataclass(frozen=True)
 class ReliabilityPathwayConfig:
@@ -39,6 +46,7 @@ class ReliabilityPathwayConfig:
     max_spatial_tokens: int = 256
     q_min: float = 0.05
     reliability_prior_scale: float = 1.0
+    target_metric: str = RELIABILITY_TARGET_METRIC
     tau_appearance: float = 0.25
     tau_motion: float = 0.25
     ema_decay: float = 0.999
@@ -58,7 +66,17 @@ class ReliabilityPathwayConfig:
             raise ValueError("All pathway dimensions must be positive.")
         if not 0.0 < self.q_min <= 1.0:
             raise ValueError("q_min must lie in (0, 1].")
-        if self.tau_appearance <= 0.0 or self.tau_motion <= 0.0:
+        if self.target_metric != RELIABILITY_TARGET_METRIC:
+            raise ValueError(
+                "The released method requires layer-normalized cosine angular "
+                "discrepancy; L2 reliability targets are not compatible."
+            )
+        if (
+            not math.isfinite(self.tau_appearance)
+            or not math.isfinite(self.tau_motion)
+            or self.tau_appearance <= 0.0
+            or self.tau_motion <= 0.0
+        ):
             raise ValueError("Teacher temperatures must be positive.")
         if not 0.0 <= self.ema_decay < 1.0:
             raise ValueError("ema_decay must lie in [0, 1).")
@@ -115,27 +133,26 @@ def normalize_native_motion(
 def source_relative_target(
     degraded_teacher: torch.Tensor,
     source_teacher: torch.Tensor,
-    temperature: float,
+    tau_b: float,
     occlusion_mask: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    """Construct the detached, dimension-free retention proxy.
+    """Construct Eq. (5)'s detached, dimension-free retention proxy.
 
-    The proxy exponentiates half the angular discrepancy between aligned
-    layer-normalized teacher features.  A logged occlusion mask sets local
-    retention to zero on the affected token grid.
+    This is exactly ``exp(-(1-cos(LN(F_d), LN(F_r)))/(2*tau_b))``.  A logged
+    occlusion mask sets local retention to zero on the affected token grid.
     """
     if degraded_teacher.shape != source_teacher.shape:
         raise ValueError("Source and degraded teacher features must be aligned.")
     if degraded_teacher.ndim < 2:
         raise ValueError("Teacher features must include a feature dimension.")
-    if temperature <= 0.0:
-        raise ValueError("temperature must be positive.")
+    if not math.isfinite(float(tau_b)) or float(tau_b) <= 0.0:
+        raise ValueError("tau_b must be finite and positive.")
     with torch.no_grad():
         degraded = F.layer_norm(degraded_teacher, (degraded_teacher.shape[-1],))
         source = F.layer_norm(source_teacher, (source_teacher.shape[-1],))
         similarity = F.cosine_similarity(degraded, source, dim=-1, eps=1e-8)
-        discrepancy = 0.5 * (1.0 - similarity.clamp(-1.0, 1.0))
-        target = torch.exp(-discrepancy / temperature)
+        angular_discrepancy = (1.0 - similarity.clamp(-1.0, 1.0)) / 2.0
+        target = torch.exp(-angular_discrepancy / float(tau_b))
         if occlusion_mask is not None:
             mask = occlusion_mask.to(device=target.device, dtype=target.dtype)
             if mask.shape != target.shape:

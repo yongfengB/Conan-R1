@@ -18,7 +18,7 @@ from dataset.degradation_protocol import (
     load_degradation_protocol,
     validate_profile_compatibility,
 )
-from dataset.types import DegradationProfile
+from dataset.types import DegradationProfile, FORBIDDEN_LENGTH_METADATA_FIELDS
 from model.parser import extract_degradation_profile, parse_answer_fields
 
 
@@ -103,6 +103,12 @@ def main() -> None:
             if not line.strip():
                 continue
             record = json.loads(line)
+            legacy_fields = FORBIDDEN_LENGTH_METADATA_FIELDS.intersection(record)
+            if legacy_fields:
+                errors.append(
+                    f"line {line_number}: forbidden legacy length fields "
+                    f"{sorted(legacy_fields)}"
+                )
             missing = REQUIRED_FIELDS - record.keys()
             if missing:
                 errors.append(

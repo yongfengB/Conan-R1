@@ -18,6 +18,17 @@ DEGRADATION_FACTORS = {
 
 SEVERITY_LEVELS = [0.0, 0.2, 0.4, 0.8]
 
+# These early-schema fields encoded a severity-conditioned target length and
+# are incompatible with the paper's task-only one-sided compactness reward.
+FORBIDDEN_LENGTH_METADATA_FIELDS = frozenset(
+    {
+        "reasoning_target_length",
+        "target_reasoning_length",
+        "reasoning_length_tolerance",
+        "length_tolerance",
+    }
+)
+
 VALID_FACTOR_NAMES: set = {
     f for factors in DEGRADATION_FACTORS.values() for f in factors
 }

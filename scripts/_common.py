@@ -115,8 +115,11 @@ def load_core_protocol(checkpoint_root: Path) -> Dict[str, Any]:
     if not path.is_file():
         raise FileNotFoundError(f"Core checkpoint metadata not found: {path}")
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("format_version") != 4:
-        raise ValueError("Only Conan-R1 core checkpoint format version 4 is accepted.")
+    if payload.get("format_version") != 5:
+        raise ValueError("Only Conan-R1 core checkpoint format version 5 is accepted.")
+    expected_formula = "exp(-(1-cos(LN(F_d),LN(F_r)))/(2*tau_b))"
+    if payload.get("reliability_target_formula") != expected_formula:
+        raise ValueError("Core checkpoint does not bind the released Eq. (5) formula.")
     if float(payload.get("motion_v_max", 0.0)) <= 0.0:
         raise ValueError("Core checkpoint has an invalid motion_v_max.")
     from dataset.video_utils import validate_farneback_parameters

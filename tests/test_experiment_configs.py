@@ -8,6 +8,11 @@ import pytest
 import yaml
 
 from scripts.materialize_experiments import materialize
+from model.reliability_pathway import (
+    RELIABILITY_TARGET_FORMULA,
+    RELIABILITY_TARGET_METRIC,
+)
+from training.rewards import validate_no_legacy_compactness_fields
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -101,3 +106,25 @@ def test_structured_sft_is_a_true_lora_only_baseline():
         "TYPE", "INFLUENCE", "REASONING", "CONCLUSION", "ANSWER"
     }
     assert all(value == 0.0 for value in config["auxiliary_losses"].values())
+
+
+def test_method_config_pins_paper_eq5_metric_formula_and_temperatures():
+    config = yaml.safe_load((ROOT / "configs" / "method_config.yaml").read_text())
+    pathway = config["reliability_pathway"]
+    assert pathway["target_metric"] == RELIABILITY_TARGET_METRIC
+    assert pathway["target_formula"] == RELIABILITY_TARGET_FORMULA
+    assert pathway["tau_appearance"] == pytest.approx(0.25)
+    assert pathway["tau_motion"] == pytest.approx(0.25)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"reasoning_target_length": 80},
+        {"reward": {"reasoning_target_length": 80}},
+        {"data": {"nested": {"length_tolerance": 0.2}}},
+    ],
+)
+def test_grpo_config_rejects_legacy_target_length_fields(config):
+    with pytest.raises(ValueError, match="Legacy target-length"):
+        validate_no_legacy_compactness_fields(config)

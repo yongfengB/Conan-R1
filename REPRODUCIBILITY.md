@@ -28,6 +28,11 @@ The command-line runners implement this contract through
 its aggregate JSON can be traced to the corresponding raw outputs and all
 three code/data/checkpoint identities.
 
+Core checkpoint protocol version 5 additionally binds the exact Eq. (5)
+layer-normalized cosine formula and reliability configuration. Training refuses
+a metric/formula mismatch. The reward and data loaders likewise reject the
+superseded sample-level target-length/tolerance interface for Eq. (12).
+
 The evaluator and result collector operate only on raw outputs. A copied table
 value without the required code, data, and checkpoint identities is not a
 release artifact.

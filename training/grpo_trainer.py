@@ -32,6 +32,7 @@ from .rewards import (
     compute_rl,
     compute_rt,
     compute_task_masked_reward,
+    validate_no_legacy_compactness_fields,
     validate_reward_weights,
 )
 
@@ -85,6 +86,7 @@ class GRPOConfig:
     def from_yaml(cls, path: str) -> "GRPOConfig":
         with open(path, encoding="utf-8") as handle:
             config = yaml.safe_load(handle)
+        validate_no_legacy_compactness_fields(config)
         instance = cls()
         for section in (
             "training",

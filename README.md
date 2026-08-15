@@ -122,6 +122,10 @@ extra time expressions.
 ## Fixed core protocol
 
 - backbone: `Qwen/Qwen2.5-VL-3B-Instruct`;
+- Eq. (5) reliability target:
+  `exp(-(1-cos(LN(F_d),LN(F_r)))/(2*tau_b))`, with
+  `tau_appearance=tau_motion=0.25`; the loader rejects L2-labeled or
+  formula-mismatched method configurations;
 - 25 uniformly sampled RGB frames, resized to 224 by 224;
 - native adjacent-frame motion divided by elapsed seconds and a fixed
   training-split `v_max`;
@@ -132,6 +136,9 @@ extra time expressions.
 - GRPO: 5 data epochs, group size 4, 2 update epochs, learning rate `1e-5`;
 - clipping epsilon `0.2`, KL coefficient `0.02`;
 - reward weights `w_d=w_e=w_t=w_l=0.25`;
+- Eq. (12) compactness: effective reasoning length after deterministic repeated
+  3--5-gram removal, a 64-token single-task or 96-token joint-task upper
+  budget, and no minimum-length, severity-conditioned, or tolerance term;
 - generation: 384 tokens, temperature 0.9, top-p 0.95;
 - evaluation: greedy decoding; seed 42.
 
@@ -228,6 +235,9 @@ python scripts/evaluate_interventions.py \
 Every evaluation JSON records raw per-sample outputs and resolves the Git
 revision, annotation hash, split hash, checkpoint hash, environment, command,
 and decoding protocol at runtime.
+
+Core checkpoint protocol version 5 binds the Eq. (5) metric, formula,
+temperatures, flow parameters, and the complete reliability-pathway config.
 
 ## Tests and manuscript parity
 

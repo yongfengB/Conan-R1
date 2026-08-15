@@ -1,4 +1,6 @@
 """Unit tests for dataset types, validation, split logic, and builder closure."""
+import json
+
 import numpy as np
 import pytest
 from dataset.types import (
@@ -11,7 +13,7 @@ from dataset.types import (
     SEVERITY_LEVELS,
 )
 from dataset.builder import SurvVAUBuilder
-from dataset.dataset import structured_output_instruction
+from dataset.dataset import SurvVAUDataset, structured_output_instruction
 from dataset.splitting import stratified_partition
 from dataset.video_utils import (
     native_motion_pairs,
@@ -117,6 +119,20 @@ def test_structural_ablation_prompt_omits_removed_blocks():
 def test_structural_ablation_prompt_rejects_reordered_blocks():
     with pytest.raises(ValueError):
         structured_output_instruction(("ANSWER", "REASONING"))
+
+
+def test_dataset_rejects_legacy_reasoning_target_length(tmp_path):
+    (tmp_path / "annotations.jsonl").write_text(
+        json.dumps({"video_id": "v1", "reasoning_target_length": 80}) + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "splits.json").write_text(
+        json.dumps({"v1": "test"}), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="severity-conditioned"):
+        SurvVAUDataset(
+            str(tmp_path), split="test", require_videos=False
+        )
 
 
 def test_stratified_partition_hits_global_counts_with_singleton_strata():

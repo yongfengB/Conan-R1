@@ -1,4 +1,6 @@
 """Unit tests for the four verifiable rewards."""
+import math
+
 import pytest
 
 from training.rewards import (
@@ -9,6 +11,7 @@ from training.rewards import (
     compute_rt,
     compute_total_reward,
     compute_task_masked_reward,
+    compactness_budget,
     effective_length,
     validate_reward_weights,
 )
@@ -65,6 +68,23 @@ def test_length_reward_uses_one_sided_task_budget():
     assert compute_rl("", event_active=True, temporal_active=False) == 1.0
     with pytest.raises(TypeError):
         compute_rl(text, base_budget="64")
+
+
+def test_length_reward_matches_paper_eq12_boundaries():
+    single_64 = " ".join(f"s{i}" for i in range(64))
+    single_65 = single_64 + " overflow"
+    joint_96 = " ".join(f"j{i}" for i in range(96))
+    joint_97 = joint_96 + " overflow"
+
+    assert compactness_budget(True, False) == 64
+    assert compactness_budget(False, True) == 64
+    assert compactness_budget(True, True) == 96
+    assert compute_rl(single_64, temporal_active=False) == 1.0
+    assert compute_rl(single_65, temporal_active=False) == pytest.approx(
+        math.exp(-1.0 / 64.0)
+    )
+    assert compute_rl(joint_96) == 1.0
+    assert compute_rl(joint_97) == pytest.approx(math.exp(-1.0 / 96.0))
 
 
 def test_total_reward_and_weight_validation():

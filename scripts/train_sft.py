@@ -12,7 +12,11 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from dataset.dataset import SurvVAUDataset
 from model.conan_r1 import ConanR1Model, LoRAConfig
-from model.reliability_pathway import ReliabilityPathwayConfig
+from model.reliability_pathway import (
+    RELIABILITY_TARGET_FORMULA,
+    RELIABILITY_TARGET_METRIC,
+    ReliabilityPathwayConfig,
+)
 from training.sft_trainer import SFTConfig, SFTTrainer
 from scripts._common import (
     finish_distributed,
@@ -82,6 +86,14 @@ def build_reliability_config(raw: dict, base_model: str) -> ReliabilityPathwayCo
     output_dim = int(backbone.hidden_size)
     path = method["reliability_pathway"]
     pathway_override = raw.get("model", {}).get("pathway", {})
+    if path.get("target_metric") != RELIABILITY_TARGET_METRIC:
+        raise ValueError(
+            "method_config target_metric does not match the released Eq. (5)."
+        )
+    if path.get("target_formula") != RELIABILITY_TARGET_FORMULA:
+        raise ValueError(
+            "method_config target_formula does not match the released Eq. (5)."
+        )
 
     def setting(name: str):
         return pathway_override.get(name, path[name])
@@ -96,6 +108,7 @@ def build_reliability_config(raw: dict, base_model: str) -> ReliabilityPathwayCo
         max_spatial_tokens=int(path["max_spatial_tokens"]),
         q_min=float(path["q_min"]),
         reliability_prior_scale=float(path["reliability_prior_scale"]),
+        target_metric=str(path["target_metric"]),
         tau_appearance=float(path["tau_appearance"]),
         tau_motion=float(path["tau_motion"]),
         ema_decay=float(path["ema_decay"]),

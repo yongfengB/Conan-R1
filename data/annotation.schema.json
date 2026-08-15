@@ -4,6 +4,12 @@
   "title": "Surv-VAU structured annotation record",
   "type": "object",
   "additionalProperties": true,
+  "allOf": [
+    {"not": {"required": ["reasoning_target_length"]}},
+    {"not": {"required": ["target_reasoning_length"]}},
+    {"not": {"required": ["reasoning_length_tolerance"]}},
+    {"not": {"required": ["length_tolerance"]}}
+  ],
   "required": [
     "video_id", "source_video_id", "source_dataset", "scene_environment", "prompt",
     "degradation_profile", "degradation_level", "degradation_domain",

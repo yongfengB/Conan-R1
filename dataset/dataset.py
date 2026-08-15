@@ -9,7 +9,11 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from .types import StructuredSample, SEVERITY_LEVELS
+from .types import (
+    FORBIDDEN_LENGTH_METADATA_FIELDS,
+    StructuredSample,
+    SEVERITY_LEVELS,
+)
 from .video_utils import native_motion_pairs, sample_anchor_motion_frames
 
 logger = logging.getLogger(__name__)
@@ -104,6 +108,12 @@ class SurvVAUDataset(Dataset):
                 if not line:
                     continue
                 obj = json.loads(line)
+                legacy_fields = FORBIDDEN_LENGTH_METADATA_FIELDS.intersection(obj)
+                if legacy_fields:
+                    raise ValueError(
+                        "Legacy severity-conditioned reasoning-length metadata is "
+                        f"forbidden: {sorted(legacy_fields)}"
+                    )
                 vid = obj.get("video_id", "")
                 assigned_split = split_map.get(vid, obj.get("split", ""))
                 if assigned_split in self.splits:

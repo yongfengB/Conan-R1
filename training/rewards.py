@@ -27,6 +27,38 @@ from scipy.optimize import linear_sum_assignment
 
 Profile = Sequence[Tuple[str, float]]
 
+COMPACTNESS_BASE_BUDGET = 32
+COMPACTNESS_PER_TASK_BUDGET = 32
+COMPACTNESS_NGRAM_ORDERS = (5, 4, 3)
+LEGACY_COMPACTNESS_FIELDS = frozenset(
+    {
+        "reasoning_target_length",
+        "target_reasoning_length",
+        "reasoning_length_tolerance",
+        "length_tolerance",
+    }
+)
+
+
+def validate_no_legacy_compactness_fields(config: Mapping[str, object]) -> None:
+    """Reject the superseded sample-target/tolerance compactness interface."""
+    legacy_locations = set()
+
+    def visit(values: Mapping[str, object], prefix: str = "") -> None:
+        for field, value in values.items():
+            location = f"{prefix}.{field}" if prefix else str(field)
+            if field in LEGACY_COMPACTNESS_FIELDS:
+                legacy_locations.add(location)
+            if isinstance(value, Mapping):
+                visit(value, location)
+
+    visit(config)
+    if legacy_locations:
+        raise ValueError(
+            "Legacy target-length compactness fields are forbidden: "
+            + ", ".join(sorted(legacy_locations))
+        )
+
 
 def _clip01(value: float) -> float:
     return float(max(0.0, min(1.0, value)))
@@ -58,9 +90,28 @@ def _remove_repeated_ngrams(tokens: List[str], n: int) -> List[str]:
 def effective_length(text: str) -> int:
     """Return token length after deterministic repeated 3--5-gram removal."""
     tokens = _tokenize_simple(text)
-    for ngram_order in (5, 4, 3):
+    for ngram_order in COMPACTNESS_NGRAM_ORDERS:
         tokens = _remove_repeated_ngrams(tokens, ngram_order)
     return len(tokens)
+
+
+def compactness_budget(
+    event_active: bool,
+    temporal_active: bool,
+    base_budget: int = COMPACTNESS_BASE_BUDGET,
+    per_task_budget: int = COMPACTNESS_PER_TASK_BUDGET,
+) -> int:
+    """Return the task budget; defaults implement Eq. (12)'s 64/96 rule."""
+    if isinstance(base_budget, bool) or not isinstance(base_budget, int):
+        raise TypeError("base_budget must be an integer.")
+    if isinstance(per_task_budget, bool) or not isinstance(per_task_budget, int):
+        raise TypeError("per_task_budget must be an integer.")
+    if base_budget <= 0 or per_task_budget < 0:
+        raise ValueError("Compactness budgets must be non-negative and non-zero.")
+    active_tasks = int(bool(event_active)) + int(bool(temporal_active))
+    if active_tasks < 1:
+        raise ValueError("At least one answer task must be active.")
+    return base_budget + per_task_budget * active_tasks
 
 
 def canonicalize_factor(name: str) -> str:
@@ -211,20 +262,16 @@ def compute_rl(
     pred_reasoning: str,
     event_active: bool = True,
     temporal_active: bool = True,
-    base_budget: int = 32,
-    per_task_budget: int = 32,
+    base_budget: int = COMPACTNESS_BASE_BUDGET,
+    per_task_budget: int = COMPACTNESS_PER_TASK_BUDGET,
 ) -> float:
-    """Apply a one-sided compactness budget without a severity-length prior."""
-    if isinstance(base_budget, bool) or not isinstance(base_budget, int):
-        raise TypeError("base_budget must be an integer.")
-    if isinstance(per_task_budget, bool) or not isinstance(per_task_budget, int):
-        raise TypeError("per_task_budget must be an integer.")
-    if base_budget <= 0 or per_task_budget < 0:
-        raise ValueError("Compactness budgets must be non-negative and non-zero.")
-    active_tasks = int(bool(event_active)) + int(bool(temporal_active))
-    if active_tasks < 1:
-        raise ValueError("At least one answer task must be active.")
-    budget = base_budget + per_task_budget * active_tasks
+    """Apply Eq. (12)'s one-sided budget without a severity-length prior."""
+    budget = compactness_budget(
+        event_active,
+        temporal_active,
+        base_budget=base_budget,
+        per_task_budget=per_task_budget,
+    )
     excess = max(0, effective_length(pred_reasoning) - budget)
     return float(math.exp(-excess / budget))
 

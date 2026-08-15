@@ -1,4 +1,7 @@
 """Equation-level tests for the revised reliability-aware pathway."""
+import math
+
+import pytest
 import torch
 
 from model.reliability_pathway import (
@@ -57,6 +60,21 @@ def test_source_relative_target_is_dimension_invariant():
         degraded.repeat(1, 1, 1, 8), source.repeat(1, 1, 1, 8), 0.25
     )
     assert torch.allclose(small, large, atol=1e-6)
+
+
+def test_source_relative_target_matches_paper_eq5_exactly():
+    source = torch.tensor([[[[1.0, -1.0]]]])
+    degraded = -source
+    target = source_relative_target(degraded, source, tau_b=0.25)
+    # cos(LN(F_d), LN(F_r)) = -1, so Eq. (5) gives exp(-1 / 0.25).
+    assert target.item() == pytest.approx(math.exp(-4.0), rel=1e-6)
+
+
+@pytest.mark.parametrize("tau_b", [0.0, -0.25, float("nan"), float("inf")])
+def test_source_relative_target_rejects_invalid_tau(tau_b):
+    features = torch.tensor([[[[1.0, -1.0]]]])
+    with pytest.raises(ValueError):
+        source_relative_target(features, features, tau_b=tau_b)
 
 
 def test_reliability_pathway_shapes_and_normalizations():

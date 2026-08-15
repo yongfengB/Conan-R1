@@ -23,6 +23,11 @@ a sample of restricted surveillance footage and is not evidence for the paper's
 aggregate performance. Its split manifest contains exact SHA256 values for the
 annotations, split assignment, and demo raw predictions.
 
+Reasoning text has no sample-level target length. The schema, dataset loader,
+and validator reject the superseded `reasoning_target_length` and length-
+tolerance fields; compactness is derived only from the active task mask at
+reward time.
+
 The four domains have distinct meanings:
 
 - `clean`: no added operator;
